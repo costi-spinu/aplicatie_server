@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import api from "./services/api";
 
-import Home from "./pages/Home";
+import Home from "./pages/home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ResetParola from "./pages/ResetParola";

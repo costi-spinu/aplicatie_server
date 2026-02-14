@@ -35,7 +35,7 @@ from .views import (
     send_bridge,
     bridge_requests,
     accept_bridge,
-    fonduri_grafic_timeline_extended,
+    fonduri_grafic_timeline_extended,api_root,
     FondViewSet,
 )
 
@@ -86,5 +86,6 @@ urlpatterns = [
     path("bridge/requests/", bridge_requests),
     path("bridge/accept/<int:pk>/", accept_bridge),
     path("fonduri/grafic/timeline/extended/", fonduri_grafic_timeline_extended),
+    # path("testapi/", api_root),
     
 ]

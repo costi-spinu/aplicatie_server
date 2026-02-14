@@ -658,3 +658,6 @@ def fonduri_grafic_timeline_extended(request):
         per_user[u.username] = build_timeline(qs_user)
 
     return Response({"total": total_data, "per_user": per_user})
+@api_view(["GET"])
+def api_root(request):
+    return Response({"status": "API running"})

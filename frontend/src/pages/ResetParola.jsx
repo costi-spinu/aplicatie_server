@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import { API_BASE_URL } from "../helpers/appConstants";
 import styles from "../styles/iosStyles";
 
 export default function ResetParola({ onBack, onHome }) {
@@ -13,7 +14,8 @@ export default function ResetParola({ onBack, onHome }) {
 
         try {
             await axios.post(
-                "http://127.0.0.1:8000/password-reset/",
+                // "http://127.0.0.1:8000/password-reset/",
+                `${API_BASE_URL}password-reset/`,
                 { email }
             );
 

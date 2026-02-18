@@ -223,6 +223,25 @@ class MiscareFond(models.Model):
 
 from django.contrib.auth.models import User
 
+class RealizareLunara(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="realizari_lunare",
+    )
+    luna = models.CharField(max_length=7)  # ex: 2026-02
+    fixed_target = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    category_targets = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "luna")
+        ordering = ["-luna"]
+
+    def __str__(self):
+        return f"{self.user.username} | {self.luna} | fixed:{self.fixed_target}"
+
+
 
 class UserBridge(models.Model):
     from_user = models.ForeignKey(
@@ -233,3 +252,5 @@ class UserBridge(models.Model):
     )
     accepted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+

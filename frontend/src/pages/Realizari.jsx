@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import api from "../services/api";
 import styles from "../styles/iosStyles";
 
-const STORAGE_KEY = "realizari_targets_by_month_v1";
+// const STORAGE_KEY = "realizari_targets_by_month_v1";
 
 const categoryLabelMap = {
     alimente: "🍎 Alimente",
@@ -63,25 +63,37 @@ export default function Realizari() {
 
     const currentMonthKey = getMonthKey();
 
-    const loadTargets = () => {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) {
-            setTargetsByMonth({});
-            return;
-        }
+    // const loadTargets = () => {
+    //     const raw = localStorage.getItem(STORAGE_KEY);
+    //     if (!raw) {
+    //         setTargetsByMonth({});
+    //         return;
+    //     }
+     const loadTargets = async () => {
 
         try {
-            const parsed = JSON.parse(raw);
-            setTargetsByMonth(parsed || {});
+            // const parsed = JSON.parse(raw);
+            // setTargetsByMonth(parsed || {});
+            const res = await api.get("realizari-tinte/");
+            const mapped = (res.data || []).reduce((acc, item) => {
+                acc[item.luna] = {
+                    id: item.id,
+                    fixedTarget: Number(item.fixed_target || 0),
+                    categoryTargets: item.category_targets || {},
+                    updatedAt: item.updated_at,
+                };
+                return acc;
+            }, {});
+            setTargetsByMonth(mapped);
         } catch {
             setTargetsByMonth({});
         }
     };
 
-    const persistTargets = (next) => {
-        setTargetsByMonth(next);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    };
+    // const persistTargets = (next) => {
+    //     setTargetsByMonth(next);
+    //     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    // };
 
     const loadExpenses = async () => {
         const [f, v] = await Promise.all([
@@ -185,37 +197,53 @@ export default function Realizari() {
         .map((key) => buildMonthSummary(key))
         .filter(Boolean);
 
-    const saveMonthTarget = () => {
+    // const saveMonthTarget = () => {
+    const saveMonthTarget = async () => {
         const fixedTarget = Number(fixedTargetInput || 0);
         const categoryTargets = categoryKeys.reduce((acc, key) => {
             acc[key] = Number(categoryTargetInputs[key] || 0);
             return acc;
         }, {});
 
-        const next = {
-            ...targetsByMonth,
-            [monthKey]: {
-                fixedTarget,
-                categoryTargets,
-                updatedAt: new Date().toISOString(),
-            },
+        const payload = {
+            luna: monthKey,
+            fixed_target: fixedTarget,
+            category_targets: categoryTargets,
         };
 
-        persistTargets(next);
+        try {
+            const existing = targetsByMonth[monthKey];
+            if (existing?.id) {
+                await api.put(`realizari-tinte/${existing.id}/`, payload);
+            } else {
+                await api.post("realizari-tinte/", payload);
+            }
+            await loadTargets();
+        } catch {
+            alert("Nu am putut salva țintele. Încearcă din nou.");
+        }
     };
 
-    const deleteMonthTarget = (key) => {
+    const deleteMonthTarget = async (key) => {
         if (!window.confirm("Sigur vrei să ștergi această țintă lunară?")) {
             return;
         }
 
-        const next = { ...targetsByMonth };
-        delete next[key];
-        persistTargets(next);
+        const entry = targetsByMonth[key];
+        if (!entry?.id) {
+            return;
+        }
 
-        if (key === monthKey) {
-            setFixedTargetInput("");
-            setCategoryTargetInputs(buildEmptyCategoryTargets());
+        try {
+            await api.delete(`realizari-tinte/${entry.id}/`);
+            await loadTargets();
+
+            if (key === monthKey) {
+                setFixedTargetInput("");
+                setCategoryTargetInputs(buildEmptyCategoryTargets());
+            }
+        } catch {
+            alert("Nu am putut șterge ținta lunară.");
         }
     };
 

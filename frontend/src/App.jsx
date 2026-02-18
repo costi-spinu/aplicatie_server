@@ -171,6 +171,8 @@ const styles = {
 
   pageContainer: {
     minHeight: "100vh",
+    maxWidth: "460px",
+    margin: "0 auto"
   },
 
   navBar: {
@@ -202,7 +204,8 @@ const styles = {
   },
 
   pageContent: {
-    padding: "20px",
+    padding: "16px",
+    fontSize: "14px",
   },
 
   loading: {

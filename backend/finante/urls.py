@@ -36,7 +36,7 @@ from .views import (
     bridge_requests,
     accept_bridge,
     fonduri_grafic_timeline_extended,
-    FondViewSet,
+    FondViewSet,RealizareLunaraViewSet,
 )
 
 router = DefaultRouter()
@@ -52,6 +52,7 @@ router.register(
     EconomieVacantaViewSet,
     basename="economii-vacanta",
 )
+router.register(r"realizari-tinte", RealizareLunaraViewSet, basename="realizari-tinte")
 # router.register(r"fonduri", FondViewSet, basename="fonduri")
 urlpatterns = [
     # auth

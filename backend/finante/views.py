@@ -1,6 +1,9 @@
 from datetime import date, timedelta
 from django.db.models.functions import TruncDate
 from django.db.models import Sum, Q
+from django.core.mail import EmailMessage
+from django.conf import settings
+import json
 from django.contrib.auth.models import User
 import calendar
 from calendar import monthrange
@@ -11,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 
+
 from .models import (
     Venit,
     CheltuialaFixa,
@@ -19,7 +23,7 @@ from .models import (
     EconomieLunara,
     MiscareFond,
     Fond,
-    UserBridge,
+    UserBridge,RealizareLunara,
 )
 
 from .serializers import (
@@ -30,7 +34,7 @@ from .serializers import (
     EconomieVacantaSerializer,
     EconomieLunaraSerializer,
     MiscareFondSerializer,
-    FondSerializer,
+    FondSerializer,RealizareLunaraSerializer,
 )
 
 from .utils import get_luna_bugetara
@@ -66,6 +70,10 @@ class CheltuialaVariabilaViewSet(BaseViewSet):
 class EconomieVacantaViewSet(BaseViewSet):
     queryset = EconomieVacanta.objects.all()
     serializer_class = EconomieVacantaSerializer
+
+class RealizareLunaraViewSet(BaseViewSet):
+    queryset = RealizareLunara.objects.all()
+    serializer_class = RealizareLunaraSerializer
 
 
 class RegisterView(APIView):
@@ -532,11 +540,93 @@ def delete_user(request, pk):
                 {"error": "Nu te poți șterge singur"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        send_copy = (
+            str(request.query_params.get("send_copy", "false")).lower()
+            == "true"
+        )
+
+        if send_copy:
+            user_data = {
+                "username": user.username,
+                "email": user.email,
+                "venituri": list(
+                    Venit.objects.filter(user=user).values(
+                        "suma", "moneda", "data", "created_at", "updated_at"
+                    )
+                ),
+                "cheltuieli_fixe": list(
+                    CheltuialaFixa.objects.filter(user=user).values(
+                        "descriere",
+                        "suma",
+                        "moneda",
+                        "data",
+                        "created_at",
+                        "updated_at",
+                    )
+                ),
+                "cheltuieli_variabile": list(
+                    CheltuialaVariabila.objects.filter(user=user).values(
+                        "categorie",
+                        "suma",
+                        "moneda",
+                        "data",
+                        "created_at",
+                        "updated_at",
+                    )
+                ),
+                "economii_vacanta": list(
+                    EconomieVacanta.objects.filter(user=user).values(
+                        "tip", "suma", "moneda", "data"
+                    )
+                ),
+                "economii_lunare": list(
+                    EconomieLunara.objects.filter(user=user).values("luna", "sold")
+                ),
+                "fonduri": list(
+                    Fond.objects.filter(user=user).values(
+                        "suma_eur", "suma_ron", "observatii", "data"
+                    )
+                ),
+                "miscari_fond": list(
+                    MiscareFond.objects.filter(user=user).values(
+                        "tip",
+                        "rubrica",
+                        "suma_eur",
+                        "suma_ron",
+                        "observatii",
+                        "data",
+                    )
+                ),
+            }
+
+            if user.email:
+                message = EmailMessage(
+                    subject="Copie date - aplicație buget",
+                    body=(
+                        f"Salut {user.username},\n\n"
+                        "Ai primit această copie a datelor tale înainte de ștergerea contului "
+                        "din aplicația de buget. Datele complete sunt atașate în fișierul JSON."
+                    ),
+                    from_email=getattr(settings, "EMAIL_HOST_USER", None),
+                    to=[user.email],
+                )
+                message.attach(
+                    f"date_{user.username}.json",
+                    json.dumps(user_data, ensure_ascii=False, default=str, indent=2),
+                    "application/json",
+                )
+                message.send(fail_silently=False)
 
         user.delete()
         return Response({"success": True})
     except User.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
+
+    except Exception as exc:
+        return Response(
+            {"error": f"Ștergere eșuată: {str(exc)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 # Send request from one user to another (e.g. for sharing budget data)

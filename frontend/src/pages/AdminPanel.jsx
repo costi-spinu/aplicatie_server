@@ -37,16 +37,37 @@ export default function AdminPanel() {
     };
 
     const deleteUser = async (user) => {
-        if (!window.confirm("Sigur vrei să ștergi acest utilizator?"))
-            return;
+        // if (!window.confirm("Sigur vrei să ștergi acest utilizator?"))
+        //     return;
 
         if (user.is_superuser) {
             alert("Nu poți șterge un superuser.");
             return;
         }
 
-        await api.delete(`admin/users/${user.id}/delete/`);
-        loadUsers();
+        // await api.delete(`admin/users/${user.id}/delete/`);
+        // loadUsers();
+        const confirmDelete = window.confirm(
+            "Ești sigur că vrei să ștergi utilizatorul? Se vor șterge și toate datele lui."
+        );
+
+        if (!confirmDelete) return;
+
+        const sendCopy = window.confirm(
+            "Vrei să trimiți pe email o copie a datelor utilizatorului înainte de ștergere?"
+        );
+
+        try {
+            await api.delete(
+                `admin/users/${user.id}/delete/?send_copy=${sendCopy}`
+            );
+            loadUsers();
+        } catch (error) {
+            const message =
+                error?.response?.data?.error ||
+                "Nu am putut șterge utilizatorul. Încearcă din nou.";
+            alert(message);
+        }
     };
 
     return (
@@ -201,11 +222,11 @@ export default function AdminPanel() {
 const localStyles = {
     searchInput: {
         width: "95%",
-        padding: "14px",
+        padding: "10px",
         borderRadius: "14px",
         border: "1px solid #E5E5EA",
-        marginBottom: "20px",
-        fontSize: "15px",
+        marginBottom: "16px",
+        fontSize: "13px",
         background: "#F9F9FB",
     },
     userList: {
@@ -217,7 +238,7 @@ const localStyles = {
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
-        padding: "18px",
+        padding: "14px",
         borderBottom: "1px solid #EAEAF0",
     },
     email: {
@@ -236,26 +257,26 @@ const localStyles = {
     },
     actionButtons: {
         display: "flex",
-        gap: "10px",
+        gap: "8px",
     },
     editButton: {
-        padding: "8px 14px",
+        padding: "7px 10px",
         borderRadius: "14px",
         border: "none",
         background: "#0A84FF",
         color: "white",
         fontWeight: "600",
-        fontSize: "14px",
+        fontSize: "12px",
         cursor: "pointer",
     },
     deleteButton: {
-        padding: "8px 14px",
+        padding: "7px 10px",
         borderRadius: "14px",
         border: "none",
         background: "#FF3B30",
         color: "white",
         fontWeight: "600",
-        fontSize: "14px",
+        fontSize: "12px",
         cursor: "pointer",
     },
     superBadge: {

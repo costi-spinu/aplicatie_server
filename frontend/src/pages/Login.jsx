@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import { API_BASE_URL } from "../helpers/appConstants";
 import Register from "./Register";
 import ResetParola from "./ResetParola";
 import styles from "../styles/iosStyles";
@@ -15,7 +16,8 @@ export default function Login({ onLogin, onBack }) {
 
         try {
             const res = await axios.post(
-                "http://127.0.0.1:8000/api/token/",
+                // "http://127.0.0.1:8000/api/token/",
+                `${API_BASE_URL}token/`,
                 { username, password }
             );
 

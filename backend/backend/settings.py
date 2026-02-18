@@ -8,12 +8,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY
 # ========================
 
-SECRET_KEY = "cheie_super_lunga_random"
+# SECRET_KEY = "cheie_super_lunga_random"
+# SECRET_KEY = "5pajc6vft_&6cgpt^nnaby)ufr#0=pk9tg6wid!jb09c-m6u$t"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+
 
 DEBUG = False
 
 ALLOWED_HOSTS = [
     "192.168.2.102",
+    "100.75.19.22",
     "localhost",
     "127.0.0.1",
 ]
@@ -47,6 +51,29 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "backend.urls"
 WSGI_APPLICATION = "backend.wsgi.application"
+
+WSGI_APPLICATION = "backend.wsgi.application"
+
+# ========================
+# TEMPLATES (OBLIGATORIU PENTRU ADMIN)
+# ========================
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
 
 # ========================
 # DATABASE
@@ -103,7 +130,7 @@ else:
 # ========================
 
 CORS_ALLOWED_ORIGINS = [
-    "http://192.168.2.102:8080",
+    "http://192.168.2.102:8080", "http://100.75.19.22",
 ]
 
 # ========================

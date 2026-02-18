@@ -1,22 +1,21 @@
 import { useState, useEffect } from "react";
 import api from "./services/api";
 
-import Home from "./pages/home";
+import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ResetParola from "./pages/ResetParola";
 
 import Venit from "./pages/Venit";
 import Cheltuieli from "./pages/Cheltuieli";
-import Grafice from "./pages/Grafice";
 import Economii from "./pages/Economii";
 import AdminPanel from "./pages/AdminPanel";
 import DiagramaLunara from "./pages/DiagramaLunara";
 import Sidebar from "./components/Sidebar";
 import Fonduri from "./pages/Fonduri";
 import GraficeFonduri from "./pages/GraficeFonduri";
-import StatusVenit from "./pages/StatusVenit";
 import ProfilUtilizator from "./pages/ProfilUtilizator";
+import Realizari from "./pages/Realizari";
 
 function App() {
   const [activePage, setActivePage] = useState(null);
@@ -142,15 +141,15 @@ function App() {
 
           <div style={styles.pageContent}>
             {activePage === "venit" && <Venit />}
-            {activePage === "status-venit" && <StatusVenit />}
             {activePage === "cheltuieli" && <Cheltuieli />}
-            {activePage === "grafice" && <Grafice />}
             {activePage === "economii" && <Economii />}
             {activePage === "diagrama" && <DiagramaLunara />}
             {activePage === "fonduri" && <Fonduri />}
-            {activePage === "grafice-fonduri" && <GraficeFonduri />}
+            {/* {activePage === "grafice-fonduri" && <GraficeFonduri />} */}
+            {activePage === "realizari" && <Realizari />}
             {activePage === "admin" && isAdmin && <AdminPanel />}
             {activePage === "profil" && !isAdmin && <ProfilUtilizator />}
+
           </div>
 
         </div>

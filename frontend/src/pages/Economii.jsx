@@ -34,6 +34,8 @@ export default function Economii() {
     const [dataCheltuialaVacanta, setDataCheltuialaVacanta] = useState(
         new Date().toISOString().split("T")[0]
     );
+    const [editCheltuialaVacantaId, setEditCheltuialaVacantaId] = useState(null);
+
 
     useEffect(() => {
         loadData();
@@ -98,9 +100,15 @@ export default function Economii() {
     const luniSortate = Object.entries(istoric)
         .sort(([a], [b]) => b.localeCompare(a));
 
-    const totalRecent = luniSortate.length
-        ? luniSortate[0][1].economii
-        : 0;
+    // const totalRecent = luniSortate.length
+    //     ? luniSortate[0][1].economii
+    //     : 0;
+
+    const totalRecent = Object.values(istoric)
+        .reduce((total, luna) => total + Number(luna.economii || 0), 0);
+
+    const formatAmount = (value) => Number(value || 0).toFixed(2);
+
 
     // ==========================
     // VACANȚĂ
@@ -132,14 +140,48 @@ export default function Economii() {
     const adaugaCheltuialaVacanta = async () => {
         if (!sumaCheltuialaVacanta) return;
 
-        await api.post("cheltuieli-variabile/", {
+        // await api.post("cheltuieli-variabile/", {
+        //     categorie: "vacanta_cheltuita",
+        //     suma: sumaCheltuialaVacanta,
+        //     moneda: "EUR",
+        //     data: dataCheltuialaVacanta
+        // });
+        const payload = {
             categorie: "vacanta_cheltuita",
             suma: sumaCheltuialaVacanta,
             moneda: "EUR",
             data: dataCheltuialaVacanta
-        });
+        }
+        if (editCheltuialaVacantaId) {
+            await api.put(`cheltuieli-variabile/${editCheltuialaVacantaId}/`, payload);
+        } else {
+            await api.post("cheltuieli-variabile/", payload);
+        }
+
+        setEditCheltuialaVacantaId(null);
 
         setSumaCheltuialaVacanta("");
+        setDataCheltuialaVacanta(new Date().toISOString().split("T")[0]);
+        loadData();
+    };
+
+    const startEditCheltuialaVacanta = (cheltuiala) => {
+        setEditCheltuialaVacantaId(cheltuiala.id);
+        setSumaCheltuialaVacanta(cheltuiala.suma);
+        setDataCheltuialaVacanta(cheltuiala.data);
+    };
+
+    const stergeCheltuialaVacanta = async (cheltuialaId) => {
+        if (!window.confirm("Sigur ștergi cheltuiala de vacanță?")) return;
+
+        await api.delete(`cheltuieli-variabile/${cheltuialaId}/`);
+
+        if (editCheltuialaVacantaId === cheltuialaId) {
+            setEditCheltuialaVacantaId(null);
+            setSumaCheltuialaVacanta("");
+            setDataCheltuialaVacanta(new Date().toISOString().split("T")[0]);
+        }
+
         loadData();
     };
 
@@ -153,13 +195,15 @@ export default function Economii() {
                     📆 Total recent economisit
                 </div>
                 <div style={styles.heroValue}>
-                    {totalRecent} €
+                    {/* {totalRecent} € */}
+                    {formatAmount(totalRecent)} €
                 </div>
             </div>
 
             {/* ISTORIC */}
             <div style={styles.card}>
-                <h3 style={styles.sectionTitle}>Istoric lunar</h3>
+                {/* <h3 style={styles.sectionTitle}>Istoric lunar</h3> */}
+                <h3 style={styles.sectionTitle}>Istoric economii lunare</h3>
 
                 {luniSortate.map(([luna, l]) => (
                     <div key={luna} style={styles.row}>
@@ -168,7 +212,8 @@ export default function Economii() {
                             color: l.economii >= 0 ? "#34C759" : "#FF3B30",
                             fontWeight: "600"
                         }}>
-                            {l.economii} €
+                            {/* {l.economii} € */}
+                            {formatAmount(l.economii)} €
                         </span>
                     </div>
                 ))}
@@ -180,15 +225,18 @@ export default function Economii() {
 
                 <div style={styles.row}>
                     <span>Total pus deoparte</span>
-                    <span>{totalVacanta} €</span>
+                    {/* <span>{totalVacanta} €</span> */}
+                    <span>{formatAmount(totalVacanta)} €</span>
                 </div>
                 <div style={styles.row}>
                     <span>Total cheltuit</span>
-                    <span>{totalCheltuit} €</span>
+                    {/* <span>{totalCheltuit} €</span> */}
+                    <span>{formatAmount(totalCheltuit)} €</span>
                 </div>
                 <div style={styles.row}>
                     <strong>Rămași</strong>
-                    <strong>{totalRamasVacanta} €</strong>
+                    {/* <strong>{totalRamasVacanta} €</strong> */}
+                    <strong>{formatAmount(totalRamasVacanta)} €</strong>
                 </div>
             </div>
 
@@ -236,17 +284,44 @@ export default function Economii() {
                 />
 
                 <button style={styles.blueButton} onClick={adaugaCheltuialaVacanta}>
-                    Adaugă cheltuială
+                    {/* Adaugă cheltuială */}
+                    {editCheltuialaVacantaId ? "Salvează cheltuiala" : "Adaugă cheltuială"}
                 </button>
 
                 {variabile
                     .filter(v => v.categorie === "vacanta_cheltuita")
-                    .map((c, index) => (
-                        <div key={index} style={styles.row}>
-                            <span>{c.data}</span>
-                            <span style={{ color: "#FF3B30" }}>
-                                -{c.suma} €
-                            </span>
+                    // .map((c, index) => (
+                    //     <div key={index} style={styles.row}>
+                    //         <span>{c.data}</span>
+                    //         <span style={{ color: "#FF3B30" }}>
+                    //             -{c.suma} €
+                    //         </span>
+                    .map((c) => (
+                        <div key={c.id} style={styles.row}>
+                            <div>
+                                <div style={{ fontWeight: 600 }}>{c.data}</div>
+                                <div style={styles.date}>Cheltuială vacanță</div>
+                            </div>
+
+                            <div style={{ textAlign: "right" }}>
+                                <div style={{ color: "#FF3B30", fontWeight: 600 }}>
+                                    -{formatAmount(c.suma)} €
+                                </div>
+                                <div style={{ marginTop: 6, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                                    <button
+                                        style={{ background: "none", border: "none", color: "#0A84FF", cursor: "pointer" }}
+                                        onClick={() => startEditCheltuialaVacanta(c)}
+                                    >
+                                        Edit
+                                    </button>
+                                    <button
+                                        style={styles.deleteBtn}
+                                        onClick={() => stergeCheltuialaVacanta(c.id)}
+                                    >
+                                        Șterge
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     ))}
             </div>

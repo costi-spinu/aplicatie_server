@@ -2,15 +2,38 @@
    STIL iOS 17 GLOBAL
 ========================== */
 
+const baseFont = "-apple-system, BlinkMacSystemFont, sans-serif";
+
 const styles = {
     container: {
         maxWidth: "520px",
         margin: "40px auto",
         padding: "20px",
-        fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+        fontFamily: baseFont,
         background: "#F2F2F7",
         minHeight: "100vh",
     },
+
+    // Reusable centered layout for auth/home pages
+    centerContainer: {
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#F2F2F7",
+        padding: "20px",
+        fontFamily: baseFont,
+    },
+    centerCard: {
+        background: "white",
+        borderRadius: "28px",
+        padding: "40px",
+        width: "100%",
+        maxWidth: "420px",
+        boxShadow: "0 20px 50px rgba(0,0,0,0.08)",
+        textAlign: "center",
+    },
+
     title: {
         fontSize: "28px",
         fontWeight: "700",
@@ -72,6 +95,124 @@ const styles = {
         fontSize: "16px",
         cursor: "pointer",
     },
+
+    // Auth/Home reusable elements
+    authIcon: {
+        fontSize: "42px",
+        marginBottom: "15px",
+    },
+    authTitle: {
+        fontSize: "24px",
+        fontWeight: "700",
+        marginBottom: "16px",
+    },
+    authSubtitle: {
+        fontSize: "14px",
+        color: "#8E8E93",
+        marginBottom: "25px",
+    },
+    authInput: {
+        width: "100%",
+        padding: "14px",
+        borderRadius: "14px",
+        border: "1px solid #E5E5EA",
+        marginBottom: "14px",
+        fontSize: "15px",
+        background: "#F9F9FB",
+        boxSizing: "border-box",
+    },
+    primaryButton: {
+        width: "100%",
+        padding: "15px",
+        borderRadius: "18px",
+        border: "none",
+        background: "linear-gradient(135deg, #0A84FF, #5E5CE6)",
+        color: "white",
+        fontWeight: "600",
+        fontSize: "16px",
+        cursor: "pointer",
+        marginTop: "10px",
+        boxShadow: "0 10px 25px rgba(10,132,255,0.3)",
+    },
+    messageBox: {
+        marginTop: "15px",
+        padding: "12px",
+        borderRadius: "12px",
+        fontSize: "14px",
+    },
+    errorBox: {
+        marginTop: "12px",
+        marginBottom: "10px",
+        padding: "12px",
+        borderRadius: "12px",
+        background: "#FFE5E5",
+        color: "#FF3B30",
+        fontSize: "14px",
+    },
+    separator: {
+        height: "1px",
+        background: "#E5E5EA",
+        margin: "25px 0",
+    },
+    secondaryButton: {
+        width: "100%",
+        padding: "12px",
+        borderRadius: "14px",
+        border: "none",
+        background: "#E5E5EA",
+        fontWeight: "500",
+        cursor: "pointer",
+        marginBottom: "10px",
+    },
+    linkButton: {
+        background: "none",
+        border: "none",
+        color: "#0A84FF",
+        fontSize: "14px",
+        cursor: "pointer",
+        marginBottom: "10px",
+    },
+    backButton: {
+        background: "none",
+        border: "none",
+        color: "#8E8E93",
+        fontSize: "14px",
+        cursor: "pointer",
+    },
+    bottomActions: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: "14px",
+    },
+    linkBlue: {
+        background: "none",
+        border: "none",
+        color: "#0A84FF",
+        cursor: "pointer",
+    },
+    linkGray: {
+        background: "none",
+        border: "none",
+        color: "#8E8E93",
+        cursor: "pointer",
+    },
+
+    homeHeroIcon: {
+        fontSize: "52px",
+        marginBottom: "20px",
+    },
+    homeSubtitle: {
+        fontSize: "16px",
+        color: "#636366",
+        lineHeight: 1.5,
+        marginBottom: "25px",
+    },
+    homeFooter: {
+        fontSize: "13px",
+        color: "#8E8E93",
+        marginBottom: "30px",
+    },
+
     row: {
         display: "flex",
         justifyContent: "space-between",

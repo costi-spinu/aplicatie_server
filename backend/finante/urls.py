@@ -35,7 +35,7 @@ from .views import (
     send_bridge,
     bridge_requests,
     accept_bridge,
-    fonduri_grafic_timeline_extended,api_root,
+    fonduri_grafic_timeline_extended,
     FondViewSet,
 )
 

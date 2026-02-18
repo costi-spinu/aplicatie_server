@@ -184,12 +184,27 @@ class MiscareFond(models.Model):
         ("retrage", "Retrage"),
     )
 
+    RUBRICI = (
+        ("fond_urgenta", "Fond de urgență"),
+        ("trading212", "Investiții - Trading212"),
+        ("xtb", "Investiții - XTB"),
+        ("revolut", "Investiții - Revolut"),
+        ("tradeville", "Investiții - Tradeville"),
+        ("cont_economii", "Cont de economii"),
+        ("alte_investitii", "Alte investiții"),
+    )
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
         related_name="miscari_fonduri",
     )
     tip = models.CharField(max_length=10, choices=TIP)
+    rubrica = models.CharField(
+        max_length=30,
+        choices=RUBRICI,
+        default="alte_investitii",
+    )
     suma_eur = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )

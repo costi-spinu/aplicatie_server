@@ -11,14 +11,13 @@ export default function Sidebar({
     const [active, setActive] = useState(null);
 
     const navItems = [
-        { key: "venit", label: "Venit" },
-        { key: "status-venit", label: "Status Venit" },
+        { key: "venit", label: "Venit / Istoric venit" },
         { key: "cheltuieli", label: "Cheltuieli" },
-        { key: "grafice", label: "Grafic cheltuieli" },
         { key: "economii", label: "Economii / Vacanță" },
         { key: "diagrama", label: "Diagramă luna în curs" },
         { key: "fonduri", label: "Fonduri investiții" },
-        { key: "grafice-fonduri", label: "Grafice Fonduri" },
+        // { key: "grafice-fonduri", label: "Grafice Fonduri" },
+        { key: "realizari", label: "Realizări" },
     ];
 
     if (isAdmin) {

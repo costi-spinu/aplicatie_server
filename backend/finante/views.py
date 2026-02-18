@@ -326,6 +326,44 @@ def miscare_fond(request):
     )
 
 
+@api_view(["PUT", "DELETE"])
+@permission_classes([IsAuthenticated])
+def miscare_fond_detail(request, pk):
+    user_ids = get_connected_user_ids(request.user)
+
+    try:
+        miscare = MiscareFond.objects.get(pk=pk, user_id__in=user_ids)
+    except MiscareFond.DoesNotExist:
+        return Response(
+            {"detail": "Mișcarea nu există."}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    if request.method == "DELETE":
+        miscare.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = MiscareFondSerializer(miscare, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    miscare = serializer.save()
+
+    if miscare.tip == "retrage":
+        if miscare.suma_eur:
+            miscare.suma_eur = -abs(miscare.suma_eur)
+        if miscare.suma_ron:
+            miscare.suma_ron = -abs(miscare.suma_ron)
+        miscare.save()
+    elif miscare.tip == "adauga":
+        if miscare.suma_eur:
+            miscare.suma_eur = abs(miscare.suma_eur)
+        if miscare.suma_ron:
+            miscare.suma_ron = abs(miscare.suma_ron)
+        miscare.save()
+
+    return Response(MiscareFondSerializer(miscare).data)
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def fonduri(request):
@@ -658,6 +696,3 @@ def fonduri_grafic_timeline_extended(request):
         per_user[u.username] = build_timeline(qs_user)
 
     return Response({"total": total_data, "per_user": per_user})
-@api_view(["GET"])
-def api_root(request):
-    return Response({"status": "API running"})

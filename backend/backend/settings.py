@@ -9,8 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ========================
 
 # SECRET_KEY = "cheie_super_lunga_random"
-# SECRET_KEY = "5pajc6vft_&6cgpt^nnaby)ufr#0=pk9tg6wid!jb09c-m6u$t"
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+SECRET_KEY = "5pajc6vft_&6cgpt^nnaby)ufr#0=pk9tg6wid!jb09c-m6u$t"
+# SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 
 
 DEBUG = False

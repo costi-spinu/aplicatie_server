@@ -129,10 +129,24 @@ else:
 # CORS
 # ========================
 
-CORS_ALLOWED_ORIGINS = [
-    "http://192.168.2.102:8080", "http://100.75.19.22",
-]
+# CORS_ALLOWED_ORIGINS = [
+#     "http://192.168.2.102:8080", "http://100.75.19.22",
+# ]
 
+
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    "http://192.168.2.102:8080",
+    "http://100.75.19.22:8080",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "http://192.168.2.102:8080",
+    "http://100.75.19.22:8080",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
 # ========================
 # REST + JWT
 # ========================

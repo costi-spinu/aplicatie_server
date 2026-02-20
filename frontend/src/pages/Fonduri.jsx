@@ -163,18 +163,10 @@ export default function Fonduri() {
         return initial;
     }, [miscari]);
 
-    const rubriciRetragere = RUBRICI.filter((r) => {
-        const total = totaluriPeRubrica[r.value];
-        return (total?.eur || 0) > 0 || (total?.ron || 0) > 0;
-    });
-
-    useEffect(() => {
-        if (tip !== "retrage") return;
-
-        if (!rubriciRetragere.some((r) => r.value === rubrica)) {
-            setRubrica(rubriciRetragere[0]?.value || "fond_urgenta");
-        }
-    }, [tip, rubrica, rubriciRetragere]);
+     const miscariSortate = useMemo(
+        () => [...miscari].sort((a, b) => Number(b.id || 0) - Number(a.id || 0)),
+        [miscari],
+    );
 
     return (
         <div style={styles.container}>
@@ -210,14 +202,12 @@ export default function Fonduri() {
                         value={rubrica}
                         onChange={(e) => setRubrica(e.target.value)}
                     >
-                        {(tip === "retrage" ? rubriciRetragere : RUBRICI).map((r) => (
+                        {RUBRICI.map((r) => (
                             <option key={r.value} value={r.value}>{r.label}</option>
                         ))}
                     </select>
 
-                    {tip === "retrage" && rubriciRetragere.length === 0 && (
-                        <div style={styles.message}>Nu ai fonduri disponibile pentru retragere.</div>
-                    )}
+                    
 
                     <input
                         style={styles.input}
@@ -291,7 +281,7 @@ export default function Fonduri() {
 
                 <h3 style={localStyles.subtitle}>💰 Fonduri investite</h3>
 
-                {miscari.length === 0 && (
+                {miscariSortate.length === 0 && (
                     <div style={localStyles.empty}>
                         Nu există încă mișcări de fonduri
                     </div>
@@ -299,13 +289,13 @@ export default function Fonduri() {
 
                 {miscari.length > 0 && (
                     <div style={localStyles.list}>
-                        {miscari.map((m, index) => (
+                        {miscariSortate.map((m, index) => (
                             <div
                                 key={m.id}
                                 style={{
                                     ...styles.row,
                                     borderBottom:
-                                        index !== miscari.length - 1
+                                        index !== miscariSortate.length - 1
                                             ? "1px solid #F0F0F5"
                                             : "none",
                                 }}

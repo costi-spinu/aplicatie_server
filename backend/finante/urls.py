@@ -36,7 +36,7 @@ from .views import (
     bridge_requests,
     accept_bridge,
     fonduri_grafic_timeline_extended,
-    FondViewSet,RealizareLunaraViewSet,
+    FondViewSet,RealizareLunaraViewSet,miscare_fond_detail,
 )
 
 router = DefaultRouter()
@@ -71,6 +71,11 @@ urlpatterns = [
     path("economii/vacanta/", economii_vacanta_sumar, name="economii-vacanta-sumar"),
     path("fonduri/", fonduri, name="fonduri"),
     path("fonduri/miscare/", miscare_fond, name="miscare-fond"),
+    path("fonduri/miscare/<int:pk>", miscare_fond_detail),
+    path("fonduri/miscari/<int:pk>/", miscare_fond_detail),
+    path("fonduri/miscari/<int:pk>", miscare_fond_detail),
+    path("fonduri/<int:pk>/", miscare_fond_detail),
+    path("fonduri/<int:pk>", miscare_fond_detail),
     path("fonduri/grafic/", fonduri_grafic, name="fonduri-grafic"),
     path(
         "fonduri/grafic/timeline/",

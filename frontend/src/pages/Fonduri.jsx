@@ -12,44 +12,35 @@ const RUBRICI = [
     { value: "alte_investitii", label: "Alte investiții" },
 ];
 
-const DIACRITICS_MAP = {
-    ă: "a", â: "a", î: "i", ș: "s", ş: "s", ț: "t", ţ: "t",
-    Ă: "a", Â: "a", Î: "i", Ș: "s", Ş: "s", Ț: "t", Ţ: "t",
-};
-
-const normalizeText = (value) => String(value || "")
-    .split("")
-    .map((char) => DIACRITICS_MAP[char] || char)
-    .join("")
-    .toLowerCase()
-    .trim();
-
-const normalizeRubricaToken = (value) => {
-    const safe = normalizeText(value).replace(/[^a-z0-9]+/g, "_");
-    return safe.replace(/^_+|_+$/g, "").replace(/_+/g, "_");
-};
-
-const RUBRICA_LOOKUP = RUBRICI.reduce((acc, rubricaItem) => {
-    acc[rubricaItem.value] = rubricaItem.value;
-    acc[normalizeText(rubricaItem.label)] = rubricaItem.value;
-    acc[normalizeRubricaToken(rubricaItem.label)] = rubricaItem.value;
-    return acc;
-}, {});
-
-const normalizeRubrica = (value) => {
-    if (!value) return "fond_urgenta";
-
-    const normalizedValue = normalizeText(value);
-    const normalizedToken = normalizeRubricaToken(value);
-
-    if (RUBRICA_LOOKUP[value]) return RUBRICA_LOOKUP[value];
-    if (RUBRICA_LOOKUP[normalizedValue]) return RUBRICA_LOOKUP[normalizedValue];
-    if (RUBRICA_LOOKUP[normalizedToken]) return RUBRICA_LOOKUP[normalizedToken];
-    return "alte_investitii";
-};
-
 const getRubricaLabel = (value) => RUBRICI.find((r) => r.value === value)?.label || value;
 const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const extractApiErrorMessage = (fallbackMessage) => fallbackMessage;
+
+const tryDetailRequest = async (requestFn, editId) => {
+    const endpoints = [
+        `fonduri/miscare/${editId}/`,
+        `fonduri/miscare/${editId}`,
+        `fonduri/miscari/${editId}/`,
+        `fonduri/miscari/${editId}`,
+        `fonduri/${editId}/`,
+        `fonduri/${editId}`,
+    ];
+
+    let lastError = null;
+    for (const endpoint of endpoints) {
+        try {
+            return await requestFn(endpoint);
+        } catch (err) {
+            lastError = err;
+            if (err?.response?.status !== 404) {
+                throw err;
+            }
+        }
+    }
+
+    throw lastError;
+};
 
 export default function Fonduri() {
     const [tip, setTip] = useState("adauga");
@@ -59,6 +50,8 @@ export default function Fonduri() {
     const [observatii, setObservatii] = useState("");
     const [msg, setMsg] = useState(null);
     const [editId, setEditId] = useState(null);
+    const [isSaving, setIsSaving] = useState(false);
+    const [isDeletingId, setIsDeletingId] = useState(null);
 
     const [miscari, setMiscari] = useState([]);
     const [totalEur, setTotalEur] = useState(0);
@@ -92,19 +85,23 @@ export default function Fonduri() {
         e.preventDefault();
         setMsg(null);
 
-        const payload = { tip, rubrica: normalizeRubrica(rubrica) };
-        if (sumaEur) payload.suma_eur = Number(sumaEur);
-        if (sumaRon) payload.suma_ron = Number(sumaRon);
+        const payload = {
+            tip,
+            rubrica,
+            suma_eur: sumaEur === "" ? null : Number(sumaEur),
+            suma_ron: sumaRon === "" ? null : Number(sumaRon),
+        };
         if (observatii) payload.observatii = observatii;
 
-        if (!payload.suma_eur && !payload.suma_ron) {
+        if (payload.suma_eur === null && payload.suma_ron === null) {
             setMsg("Introdu o sumă în EUR sau RON");
             return;
         }
 
+        setIsSaving(true);
         try {
             if (editId) {
-                await api.put(`fonduri/miscare/${editId}/`, payload);
+                await tryDetailRequest((endpoint) => api.put(endpoint, payload), editId);
                 setMsg("✔ Mișcare actualizată");
             } else {
                 await api.post("fonduri/miscare/", payload);
@@ -114,14 +111,16 @@ export default function Fonduri() {
             resetForm();
             await loadMiscari();
         } catch (err) {
-            setMsg("❌ Eroare la salvare");
+            setMsg(`❌ ${extractApiErrorMessage("Eroare la salvare")}`);
+        } finally {
+            setIsSaving(false);
         }
     };
 
     const startEdit = (miscare) => {
         setEditId(miscare.id);
         setTip(miscare.tip || "adauga");
-        setRubrica(normalizeRubrica(miscare.rubrica));
+        setRubrica(miscare.rubrica || "fond_urgenta");
         setSumaEur(miscare.suma_eur ? String(Math.abs(Number(miscare.suma_eur))) : "");
         setSumaRon(miscare.suma_ron ? String(Math.abs(Number(miscare.suma_ron))) : "");
         setObservatii(miscare.observatii || "");
@@ -131,15 +130,18 @@ export default function Fonduri() {
     const stergeMiscare = async (id) => {
         if (!window.confirm("Sigur ștergi această mișcare?")) return;
 
+        setIsDeletingId(id);
         try {
-            await api.delete(`fonduri/miscare/${id}/`);
+            await tryDetailRequest((endpoint) => api.delete(endpoint), id);
             setMsg("✔ Mișcare ștearsă");
             if (editId === id) {
                 resetForm();
             }
             await loadMiscari();
-        } catch {
-            setMsg("❌ Eroare la ștergere");
+        } catch (err) {
+            setMsg(`❌ ${extractApiErrorMessage("Eroare la ștergere")}`);
+        } finally {
+            setIsDeletingId(null);
         }
     };
 
@@ -150,7 +152,7 @@ export default function Fonduri() {
         }, {});
 
         miscari.forEach((m) => {
-            const key = normalizeRubrica(m.rubrica);
+            const key = m.rubrica || "alte_investitii";
             if (!initial[key]) {
                 initial[key] = { eur: 0, ron: 0 };
             }
@@ -247,7 +249,7 @@ export default function Fonduri() {
                     />
 
                     <div style={{ display: "flex", gap: 10 }}>
-                        <button style={styles.blueButton}>
+                        <button style={styles.blueButton} disabled={isSaving}>
                             {editId ? "💾 Salvează modificările" : "💾 Salvează"}
                         </button>
                         {editId && (
@@ -313,7 +315,7 @@ export default function Fonduri() {
                                         👤 {m.username}
                                     </div>
                                     <div style={localStyles.itemDate}>{m.data}</div>
-                                    <div style={localStyles.itemObs}>Rubrică: {getRubricaLabel(normalizeRubrica(m.rubrica))}</div>
+                                    <div style={localStyles.itemObs}>Rubrică: {getRubricaLabel(m.rubrica)}</div>
                                     {m.observatii && (
                                         <div style={localStyles.itemObs}>{m.observatii}</div>
                                     )}
@@ -328,7 +330,14 @@ export default function Fonduri() {
                                     </div>
                                     <div style={{ marginTop: 6, display: "flex", gap: 10, justifyContent: "flex-end" }}>
                                         <button type="button" style={localStyles.editBtn} onClick={() => startEdit(m)}>Edit</button>
-                                        <button type="button" style={styles.deleteBtn} onClick={() => stergeMiscare(m.id)}>Șterge</button>
+                                        <button
+                                            type="button"
+                                            style={styles.deleteBtn}
+                                            disabled={isDeletingId === m.id}
+                                            onClick={() => stergeMiscare(m.id)}
+                                        >
+                                            {isDeletingId === m.id ? "Se șterge..." : "Șterge"}
+                                        </button>
                                     </div>
                                 </div>
                             </div>

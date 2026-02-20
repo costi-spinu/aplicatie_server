@@ -6,22 +6,18 @@ const baseFont = "-apple-system, BlinkMacSystemFont, sans-serif";
 
 const styles = {
     container: {
+        // maxWidth: "100%",
+        // margin: "0",
+        // padding: "20px",
+        width: "100%",
         maxWidth: "500px",
-        margin: "40px auto",
+        margin: "24px auto 40px",
         padding: "10px",
-        fontFamily: fontStack,
+        boxSizing: "border-box",
+        fontFamily: baseFont,
         background: "#F2F2F7",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
+        minHeight: "100vh",
     },
-        // maxWidth: "500px",
-        // margin: "40px auto",
-        // padding: "10px",
-        // fontFamily: baseFont,
-        // background: "#F2F2F7",
-        // minHeight: "100vh",
-    // },
 
     // Reusable centered layout for auth/home pages
     centerContainer: {

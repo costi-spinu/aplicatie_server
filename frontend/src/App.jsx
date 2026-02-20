@@ -79,6 +79,20 @@ function App() {
     setShowSidebar(true);
   };
 
+
+  const pageLabels = {
+    venit: "Venit",
+    cheltuieli: "Cheltuieli",
+    economii: "Economii",
+    diagrama: "Diagramă luna în curs",
+    fonduri: "Fonduri investiții",
+    realizari: "Realizări",
+    admin: "Admin",
+    profil: "Profil utilizator",
+  };
+
+  const activePageLabel = pageLabels[activePage] || "Pagină";
+
   if (loading) {
     return (
       <div style={styles.loading}>
@@ -133,10 +147,14 @@ function App() {
 
           {/* 🔵 iOS NAV BAR */}
           <div style={styles.navBar}>
-            <button onClick={handleBack} style={styles.backButton}>
-              <span style={styles.backArrow}>‹</span>
-              Înapoi
-            </button>
+            <div style={styles.navBarInner}>
+              <button onClick={handleBack} style={styles.backButton}>
+                <span style={styles.backArrow}>‹</span>
+                Înapoi
+              </button>
+              <div style={styles.pageTitle}>{activePageLabel}</div>
+              <div style={styles.navSpacer} />
+            </div>
           </div>
 
           <div style={styles.pageContent}>
@@ -171,41 +189,77 @@ const styles = {
 
   pageContainer: {
     minHeight: "100vh",
-    maxWidth: "460px",
+    maxWidth: "500px",
     margin: "0 auto"
   },
 
   navBar: {
     position: "sticky",
     top: 0,
-    background: "rgba(255,255,255,0.85)",
+    // background: "rgba(255,255,255,0.85)",
+    padding: "10px 10px 0",
+    zIndex: 10,
+    background: "#F2F2F7",
+  },
+
+  navBarInner: {
+    width: "100%",
+    maxWidth: "450px",
+    margin: "0 auto",
+    padding: "8px 10px",
+    borderRadius: "16px",
+    background: "rgba(255,255,255,0.8)",
     backdropFilter: "blur(14px)",
-    borderBottom: "1px solid #E5E5EA",
-    padding: "12px 20px",
+    // borderBottom: "1px solid #E5E5EA",
+    // padding: "12px 20px",
+    border: "1px solid #E5E5EA",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
     display: "flex",
     alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    boxSizing: "border-box",
   },
 
   backButton: {
-    background: "none",
-    border: "none",
+    background: "#EAF3FF",
+    border: "1px solid #D2E7FF",
     color: "#0A84FF",
-    fontSize: "17px",
-    fontWeight: "500",
+    fontSize: "15px",
+    fontWeight: "600",
     display: "flex",
     alignItems: "center",
     cursor: "pointer",
+    borderRadius: "12px",
+    padding: "6px 10px",
+    minWidth: "92px",
   },
 
   backArrow: {
-    fontSize: "28px",
-    marginRight: "4px",
+    fontSize: "22px",
+    marginRight: "2px",
     lineHeight: 1,
   },
 
+  pageTitle: {
+    fontSize: "15px",
+    fontWeight: "600",
+    color: "#1C1C1E",
+    textAlign: "center",
+    flex: 1,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
+  navSpacer: {
+    minWidth: "92px",
+  },
+
+
   pageContent: {
-    padding: "16px",
-    fontSize: "14px",
+    padding: "0 10px 20px",
+    fontSize: "15px",
   },
 
   loading: {

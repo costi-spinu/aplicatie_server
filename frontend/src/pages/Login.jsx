@@ -2,6 +2,7 @@ import { useState } from "react";
 import Register from "./Register";
 import ResetParola from "./ResetParola";
 import api from "../services/api";
+import { API_BASE_URLS } from "../helpers/appConstants";
 import styles from "../styles/iosStyles";
 
 export default function Login({ onLogin, onBack }) {
@@ -14,12 +15,21 @@ export default function Login({ onLogin, onBack }) {
     setError("");
 
     try {
-      const res = await api.post("token/", { username, password });
+      const res = await api.post("token/", {
+        username: username.trim(),
+        password,
+      });
       localStorage.setItem("access", res.data.access);
       localStorage.setItem("refresh", res.data.refresh);
       await onLogin();
-    } catch {
-      setError("Date de autentificare incorecte");
+    } catch (err) {
+      if (!err.response) {
+        setError(`Backend indisponibil la ${API_BASE_URLS.join(", ")}`);
+        return;
+      }
+
+      const detail = err.response?.data?.detail;
+      setError(detail || "Date de autentificare incorecte");
     }
   };
 

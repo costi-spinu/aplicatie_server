@@ -29,11 +29,21 @@ const getPortApiBaseUrl = (port) => {
 };
 
 const getDefaultApiBaseUrls = () => {
-  const urls = [getSameOriginApiBaseUrl()];
-
-  if (typeof window === "undefined" || window.location.port !== "8000") {
-    urls.push(getPortApiBaseUrl("8000"));
+  if (typeof window === "undefined") {
+    return [getPortApiBaseUrl("8000")];
   }
+
+  const sameOriginUrl = getSameOriginApiBaseUrl();
+  const backendPortUrl = getPortApiBaseUrl("8000");
+
+  // Cand frontend-ul ruleaza separat (Vite/preview/static pe 5173/8080),
+  // endpoint-urile API reale sunt in backend-ul Django de pe portul 8000.
+  // Pastram same-origin ca fallback pentru deployment-uri cu reverse proxy sau
+  // cand aplicatia este servita direct de Django.
+  const prefersSameOrigin = !window.location.port || window.location.port === "8000";
+  const urls = prefersSameOrigin
+    ? [sameOriginUrl, backendPortUrl]
+    : [backendPortUrl, sameOriginUrl];
 
   return Array.from(new Set(urls));
 };

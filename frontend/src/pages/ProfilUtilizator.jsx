@@ -127,7 +127,8 @@ export default function ProfilUtilizator() {
   }, []);
 
   const loadFinancialData = useCallback(async () => {
-    const [buget, venituri, fixe, variabile, fonduri] = await Promise.all([
+    const fallbackFonduri = { total_eur: 0, total_ron: 0, miscari: [] };
+    const requests = await Promise.allSettled([
       api.get("buget/lunar/"),
       api.get("venituri/"),
       api.get("cheltuieli-fixe/"),
@@ -135,12 +136,26 @@ export default function ProfilUtilizator() {
       api.get("fonduri/"),
     ]);
 
+    requests.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.warn("Nu am putut incarca datele financiare de profil", {
+          index,
+          error: result.reason,
+        });
+      }
+    });
+
+    const getData = (index, fallback) =>
+      requests[index].status === "fulfilled"
+        ? requests[index].value.data || fallback
+        : fallback;
+
     setFinancialData({
-      buget: buget.data || null,
-      venituri: venituri.data || [],
-      fixe: fixe.data || [],
-      variabile: variabile.data || [],
-      fonduri: fonduri.data || { total_eur: 0, total_ron: 0, miscari: [] },
+      buget: getData(0, null),
+      venituri: getData(1, []),
+      fixe: getData(2, []),
+      variabile: getData(3, []),
+      fonduri: getData(4, fallbackFonduri),
     });
   }, []);
 
@@ -166,17 +181,29 @@ export default function ProfilUtilizator() {
   useEffect(() => {
     const init = async () => {
       try {
-        await Promise.all([
-          loadProfile(),
+        await loadProfile();
+
+        const secondaryResults = await Promise.allSettled([
           loadUsers(),
           loadBridgeRequests(),
           loadBridgeConnections(),
           loadFinancialData(),
           fetchExchangeRate(),
         ]);
+
+        const hasSecondaryErrors = secondaryResults.some(
+          (result) => result.status === "rejected"
+        );
+        if (hasSecondaryErrors) {
+          console.warn(
+            "Unele date secundare de profil nu au putut fi incarcate",
+            secondaryResults
+          );
+          setMsg("Profilul s-a incarcat, dar unele informatii secundare lipsesc.");
+        }
       } catch (err) {
         console.error(err);
-        setMsg("Nu am putut incarca toate datele de profil.");
+        setMsg("Nu am putut incarca datele de profil.");
       } finally {
         setLoading(false);
       }

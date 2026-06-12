@@ -10,7 +10,9 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import ipaddress
 import os
+import socket
 from datetime import timedelta
 from pathlib import Path
 
@@ -27,6 +29,32 @@ def env_list(name, default=None):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_bool(name, default=False):
+    """Return a boolean environment variable value."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def get_host_aliases():
+    """Return safe local hostnames/IPs commonly used from LAN browsers."""
+    aliases = set()
+    for hostname in {socket.gethostname(), socket.getfqdn()}:
+        if hostname:
+            aliases.add(hostname)
+            aliases.add(f"{hostname.split('.')[0]}.local")
+        try:
+            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                raw_ip = info[4][0]
+                ip = ipaddress.ip_address(raw_ip)
+                if ip.is_private and not ip.is_loopback:
+                    aliases.add(raw_ip)
+        except socket.gaierror:
+            continue
+    return sorted(aliases)
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -37,21 +65,25 @@ SECRET_KEY = os.environ.get(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in {"1", "true", "yes", "on"}
+DEBUG = env_bool("DJANGO_DEBUG", True)
 
 # Backend-ul poate fi apelat fie pe acelasi origin ca frontend-ul, fie pe portul
 # 8000 ca fallback. Valorile implicite acopera localhost, IP-ul LAN initial si
 # IP-ul Tailscale initial; in productie pot fi extinse cu DJANGO_ALLOWED_HOSTS.
+DEFAULT_ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "192.168.2.102",
+    "100.75.19.22",
+    ".local",
+    ".ts.net",
+    *get_host_aliases(),
+]
+
 ALLOWED_HOSTS = env_list(
     "DJANGO_ALLOWED_HOSTS",
-    [
-        "localhost",
-        "127.0.0.1",
-        "[::1]",
-        "192.168.2.102",
-        "100.75.19.22",
-        ".ts.net",
-    ],
+    ["*"] if DEBUG else DEFAULT_ALLOWED_HOSTS,
 )
 
 FRONTEND_ORIGINS = env_list(
@@ -181,7 +213,15 @@ STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.exists() else []
 CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
 CORS_ALLOWED_ORIGIN_REGEXES = env_list(
     "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
-    [r"^https?://[A-Za-z0-9.-]+\.ts\.net(?::(5173|8080))?$"],
+    [
+        r"^https?://localhost(?::(5173|4173|8080|8000))?$",
+        r"^https?://127\.0\.0\.1(?::(5173|4173|8080|8000))?$",
+        r"^https?://10(?:\.\d{1,3}){3}(?::(5173|4173|8080|8000))?$",
+        r"^https?://192\.168(?:\.\d{1,3}){2}(?::(5173|4173|8080|8000))?$",
+        r"^https?://172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}(?::(5173|4173|8080|8000))?$",
+        r"^https?://[A-Za-z0-9.-]+\.local(?::(5173|4173|8080|8000))?$",
+        r"^https?://[A-Za-z0-9.-]+\.ts\.net(?::(5173|4173|8080|8000))?$",
+    ],
 )
 CSRF_TRUSTED_ORIGINS = FRONTEND_ORIGINS + env_list(
     "DJANGO_CSRF_TRUSTED_ORIGIN_PATTERNS",

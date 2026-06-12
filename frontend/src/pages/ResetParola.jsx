@@ -1,87 +1,66 @@
 import { useState } from "react";
 import axios from "axios";
-import { API_BASE_URL } from "../helpers/appConstants";
+import { PASSWORD_RESET_URL } from "../helpers/appConstants";
 import styles from "../styles/iosStyles";
 
 export default function ResetParola({ onBack, onHome }) {
-    const [email, setEmail] = useState("");
-    const [msg, setMsg] = useState("");
-    const [isError, setIsError] = useState(false);
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState("");
+  const [isError, setIsError] = useState(false);
 
-    const trimite = async () => {
-        setMsg("");
-        setIsError(false);
+  const trimite = async () => {
+    setMsg("");
+    setIsError(false);
 
-        try {
-            await axios.post(
-                // "http://127.0.0.1:8000/password-reset/",
-                `${API_BASE_URL}password-reset/`,
-                { email }
-            );
+    try {
+      await axios.post(PASSWORD_RESET_URL, { email });
+      setMsg("Verifica emailul pentru resetare");
+      setIsError(false);
+    } catch {
+      setMsg("Email invalid");
+      setIsError(true);
+    }
+  };
 
-            setMsg("Verifică emailul pentru resetare");
-            setIsError(false);
-        } catch {
-            setMsg("Email invalid");
-            setIsError(true);
-        }
-    };
+  return (
+    <div style={styles.centerContainer}>
+      <div style={styles.centerCard}>
+        <h2 style={styles.authTitle}>Resetare parola</h2>
+        <p style={styles.authSubtitle}>
+          Introdu adresa de email pentru a primi linkul de resetare.
+        </p>
+        <input
+          style={styles.authInput}
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <button onClick={trimite} style={styles.primaryButton}>
+          Trimite link
+        </button>
 
-    return (
-        <div style={styles.centerContainer}>
-            <div style={styles.centerCard}>
-                <div style={styles.authIcon}>🔑</div>
+        {msg && (
+          <div
+            style={{
+              ...styles.messageBox,
+              background: isError ? "#fdebea" : "#e6f4ed",
+              color: isError ? "#b42318" : "#146c43",
+            }}
+          >
+            {msg}
+          </div>
+        )}
 
-                <h2 style={styles.authTitle}>Resetare parolă</h2>
-
-                <p style={styles.authSubtitle}>
-                    Introdu adresa de email pentru a primi linkul de resetare.
-                </p>
-
-                <input
-                    style={styles.authInput}
-                    placeholder="Email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                />
-
-                <button
-                    onClick={trimite}
-                    style={styles.primaryButton}
-                >
-                    Trimite link
-                </button>
-
-                {msg && (
-                    <div
-                        style={{
-                            ...styles.messageBox,
-                            background: isError ? "#FFE5E5" : "#E6F9ED",
-                            color: isError ? "#FF3B30" : "#34C759",
-                        }}
-                    >
-                        {isError ? "❌ " : "📧 "} {msg}
-                    </div>
-                )}
-
-                <div style={styles.separator} />
-
-                <div style={styles.bottomActions}>
-                    <button
-                        onClick={onBack}
-                        style={styles.linkBlue}
-                    >
-                        ⬅ Înapoi
-                    </button>
-
-                    <button
-                        onClick={onHome}
-                        style={styles.linkGray}
-                    >
-                        🏠 Home
-                    </button>
-                </div>
-            </div>
+        <div style={styles.separator} />
+        <div style={styles.bottomActions}>
+          <button onClick={onBack} style={styles.linkBlue}>
+            Inapoi
+          </button>
+          <button onClick={onHome} style={styles.linkGray}>
+            Home
+          </button>
         </div>
-    );
+      </div>
+    </div>
+  );
 }

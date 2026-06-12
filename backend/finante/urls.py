@@ -13,7 +13,9 @@ from .views import (
     # viewsets
     VenitViewSet,
     CheltuialaFixaViewSet,
+    CheltuialaFixaAutomataViewSet,
     CheltuialaVariabilaViewSet,
+    SalaryScheduleViewSet,
     EconomieVacantaViewSet,
     # function views
     venit_total_lunar,
@@ -24,6 +26,7 @@ from .views import (
     economii_vacanta_sumar,
     fonduri,
     miscare_fond,
+    miscare_fond_detail,
     fonduri_grafic,
     fonduri_grafic_timeline,
     venit_status_lunar,
@@ -34,14 +37,32 @@ from .views import (
     lista_useri_simpli,
     send_bridge,
     bridge_requests,
+    bridge_connections,
     accept_bridge,
     fonduri_grafic_timeline_extended,
-    FondViewSet,RealizareLunaraViewSet,miscare_fond_detail,
+    FondViewSet,
+    RealizariTargetViewSet,
+    profile,
+    change_password,
+    request_email_change,
+    confirm_email_change,
+    obiective_cheltuieli_global,
+    curs_bnr,
+    install_info,
 )
 
 router = DefaultRouter()
 router.register(r"venituri", VenitViewSet, basename="venituri")
+router.register(r"salary-schedules", SalaryScheduleViewSet, basename="salary-schedules")
+router.register(
+    r"realizari-targets", RealizariTargetViewSet, basename="realizari-targets"
+)
 router.register(r"cheltuieli-fixe", CheltuialaFixaViewSet, basename="cheltuieli-fixe")
+router.register(
+    r"cheltuieli-fixe-automate",
+    CheltuialaFixaAutomataViewSet,
+    basename="cheltuieli-fixe-automate",
+)
 router.register(
     r"cheltuieli-variabile",
     CheltuialaVariabilaViewSet,
@@ -52,17 +73,32 @@ router.register(
     EconomieVacantaViewSet,
     basename="economii-vacanta",
 )
-router.register(r"realizari-tinte", RealizareLunaraViewSet, basename="realizari-tinte")
 # router.register(r"fonduri", FondViewSet, basename="fonduri")
 urlpatterns = [
     # auth
     path("register/", RegisterView.as_view(), name="register"),
     path("me/", me, name="me"),
+    path("profile/", profile, name="profile"),
+    path("profile/password/", change_password, name="change-password"),
+    path("email-change/request/", request_email_change, name="email-change-request"),
+    path("email-change/confirm/", confirm_email_change, name="email-change-confirm"),
+    path(
+        "email-change/confirm/<str:code>/",
+        confirm_email_change,
+        name="email-change-confirm-link",
+    ),
     # statistici / calcule
     path("venit/total/", venit_total_lunar, name="venit-total"),
     path("venit/status/", venit_status_lunar, name="venit-status"),
+    path("curs-bnr/", curs_bnr, name="curs-bnr"),
+    path("install/info/", install_info, name="install-info"),
     path("buget/lunar/", buget_lunar, name="buget-lunar"),
     path("grafice/luna/", grafice_luna, name="grafice-luna"),
+    path(
+        "obiective-cheltuieli-global/",
+        obiective_cheltuieli_global,
+        name="obiective-cheltuieli-global",
+    ),
     # economii
     path("economii/calculeaza/", calculeaza_economii_luna, name="economii-calculeaza"),
     path("economii/istoric/", istoric_economii, name="economii-istoric"),
@@ -71,11 +107,7 @@ urlpatterns = [
     path("economii/vacanta/", economii_vacanta_sumar, name="economii-vacanta-sumar"),
     path("fonduri/", fonduri, name="fonduri"),
     path("fonduri/miscare/", miscare_fond, name="miscare-fond"),
-    path("fonduri/miscare/<int:pk>", miscare_fond_detail),
-    path("fonduri/miscari/<int:pk>/", miscare_fond_detail),
-    path("fonduri/miscari/<int:pk>", miscare_fond_detail),
-    path("fonduri/<int:pk>/", miscare_fond_detail),
-    path("fonduri/<int:pk>", miscare_fond_detail),
+    path("fonduri/miscare/<int:pk>/", miscare_fond_detail, name="miscare-fond-detail"),
     path("fonduri/grafic/", fonduri_grafic, name="fonduri-grafic"),
     path(
         "fonduri/grafic/timeline/",
@@ -90,8 +122,7 @@ urlpatterns = [
     path("users/list/", lista_useri_simpli),
     path("bridge/send/", send_bridge),
     path("bridge/requests/", bridge_requests),
+    path("bridge/connections/", bridge_connections),
     path("bridge/accept/<int:pk>/", accept_bridge),
     path("fonduri/grafic/timeline/extended/", fonduri_grafic_timeline_extended),
-    # path("testapi/", api_root),
-    
 ]

@@ -1,5 +1,36 @@
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --app-page: #eef2f1;
+  --app-panel: #ffffff;
+  --app-panel-alt: #f8faf9;
+  --app-border: #cfd8d3;
+  --app-border-soft: #e4ebe7;
+  --app-text: #10201a;
+  --app-muted: #5f6f66;
+  --app-primary: #1f5f8b;
+  --app-primary-dark: #174a6b;
+  --app-primary-soft: #eef7fb;
+  --app-success: #146c43;
+  --app-danger: #b42318;
+  --app-danger-soft: #fdebea;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  color: var(--app-text);
+  background: var(--app-page);
+}
+
+:root[data-theme="dark"] {
+  --app-page: #0f1412;
+  --app-panel: #171d1a;
+  --app-panel-alt: #202823;
+  --app-border: #3a4740;
+  --app-border-soft: #2b3630;
+  --app-text: #eef5f1;
+  --app-muted: #a9b8b0;
+  --app-primary: #74b7df;
+  --app-primary-dark: #b8dbef;
+  --app-primary-soft: #172d3a;
+  --app-success: #63c98b;
+  --app-danger: #ff8f86;
+  --app-danger-soft: #3a1f1f;
 }
 
 * {
@@ -8,5 +39,32 @@
 
 body {
   margin: 0;
-  background: #f2f2f7;
+  background: var(--app-page);
+  color: var(--app-text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #1f5f8b;
+  outline-offset: 2px;
+}
+
+table {
+  border-collapse: collapse;
 }

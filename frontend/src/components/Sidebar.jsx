@@ -1,187 +1,197 @@
 import { useState } from "react";
+import AppControls from "./AppControls";
+import InstallAppButton from "./InstallAppButton";
 
-export default function Sidebar({
-    setPage,
-    isAdmin,
-    logout,
-    theme,
-    setTheme,
-    user, // 🔥 primim user-ul
-}) {
-    const [active, setActive] = useState(null);
+export default function Sidebar({ setPage, isAdmin, logout, user }) {
+  const [active, setActive] = useState(null);
+  const profilePhoto = user?.profile?.poza;
+  const displayName =
+    [user?.first_name, user?.last_name].filter(Boolean).join(" ") ||
+    user?.username ||
+    "-";
 
-    const navItems = [
-        { key: "venit", label: "Venit / Istoric venit" },
-        { key: "cheltuieli", label: "Cheltuieli" },
-        { key: "economii", label: "Economii / Vacanță" },
-        { key: "diagrama", label: "Diagramă luna în curs" },
-        { key: "fonduri", label: "Fonduri investiții" },
-        // { key: "grafice-fonduri", label: "Grafice Fonduri" },
-        { key: "realizari", label: "Realizări" },
-    ];
+  const navItems = [
+    { key: "venit", label: "Venit" },
+    { key: "cheltuieli", label: "Cheltuieli" },
+    { key: "economii", label: "Economii si vacanta" },
+    { key: "fonduri", label: "Fonduri investitii" },
+    { key: "realizari", label: "Obiective cheltuieli" },
+    { key: "profil", label: "Profil utilizator" },
+  ];
 
-    if (isAdmin) {
-        navItems.push({ key: "admin", label: "Admin" });
-    } else {
-        navItems.push({ key: "profil", label: "Profil utilizator" });
-    }
+  if (isAdmin) {
+    navItems.push({ key: "admin", label: "Administrare" });
+  }
 
-    const handleClick = (key) => {
-        setActive(key);
-        setPage(key);
-    };
+  const handleClick = (key) => {
+    setActive(key);
+    setPage(key);
+  };
 
-    return (
-        <div style={styles.container}>
-            {/* HERO CARD */}
-            <div style={styles.heroCard}>
-
-                {/* 🔥 WELCOME TEXT */}
-                <div style={styles.welcomeText}>
-                    Bine ai venit,
-                    <span style={styles.username}>
-                        {" "}{user?.username}
-                    </span>
-                </div>
-
-                <div style={styles.heroLabel}>💰</div>
-                <div style={styles.heroTitle}>Budget App</div>
+  return (
+    <div style={styles.page}>
+      <div style={styles.shell}>
+        <header style={styles.header}>
+          <div style={styles.brandBlock}>
+            {profilePhoto && (
+              <img src={profilePhoto} alt="Profil" style={styles.avatar} />
+            )}
+            <div>
+              <div style={styles.appName}>Buget & Economii</div>
+              <div style={styles.userLine}>Cont: {displayName}</div>
             </div>
+          </div>
+          <div style={styles.headerActions}>
+            <InstallAppButton />
+            <AppControls />
+            <button onClick={logout} style={styles.logoutButton}>
+              Logout
+            </button>
+          </div>
+        </header>
 
-            {/* NAVIGATION CARD */}
-            <div style={styles.card}>
-                {navItems.map((item, index) => (
-                    <div
-                        key={item.key}
-                        onClick={() => handleClick(item.key)}
-                        style={{
-                            ...styles.row,
-                            ...(active === item.key
-                                ? styles.activeRow
-                                : {}),
-                            borderBottom:
-                                index !== navItems.length - 1
-                                    ? "1px solid #eee"
-                                    : "none",
-                        }}
-                    >
-                        <span>{item.label}</span>
-                        <span style={styles.chevron}>›</span>
-                    </div>
-                ))}
-            </div>
-
-            {/* SETTINGS CARD */}
-            <div style={styles.card}>
-                <div
-                    onClick={() =>
-                        setTheme(theme === "dark" ? "light" : "dark")
-                    }
-                    style={styles.row}
-                >
-                    <span>
-                        {theme === "dark"
-                            ? "☀️ Light Mode"
-                            : "🌙 Dark Mode"}
-                    </span>
-                </div>
-
-                <div
-                    onClick={logout}
-                    style={{
-                        ...styles.row,
-                        color: "#FF3B30",
-                    }}
-                >
-                    Logout
-                </div>
-            </div>
-        </div>
-    );
+        <section style={styles.panel}>
+          <div style={styles.panelHeader}>
+            <h1 style={styles.title}>Meniu principal</h1>
+            <span style={styles.subtitle}>Planificare financiara personala</span>
+          </div>
+          <div style={styles.navList}>
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                onClick={() => handleClick(item.key)}
+                style={{
+                  ...styles.navButton,
+                  ...(active === item.key ? styles.navButtonActive : {}),
+                }}
+              >
+                <span>{item.label}</span>
+                <span style={styles.navAction}>Deschide</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
 }
 
-//////////////////////////////////////////////////////
-// 🎨 STIL iOS 17 PREMIUM
-//////////////////////////////////////////////////////
-
-const fontStack =
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-
 const styles = {
-    container: {
-        maxWidth: "500px",
-        margin: "40px auto",
-        padding: "10px",
-        fontFamily: fontStack,
-        background: "#F2F2F7",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-    },
-
-    heroCard: {
-        background: "linear-gradient(135deg, #0A84FF, #5E5CE6)",
-        borderRadius: "24px",
-        padding: "20px",
-        marginBottom: "25px",
-        boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
-        width: "100%",
-        maxWidth: "600px",
-        color: "white",
-    },
-
-    welcomeText: {
-        fontSize: "14px",
-        fontWeight: "400",
-        opacity: 0.9,
-    },
-
-    username: {
-        fontWeight: "600",
-    },
-
-    heroLabel: {
-        fontSize: "48px",
-        opacity: 0.95,
-        marginTop: "12px",
-    },
-
-    heroTitle: {
-        fontSize: "16px",
-        fontWeight: "500",
-        marginTop: "12px",
-    },
-
-    card: {
-        background: "white",
-        borderRadius: "20px",
-        padding: "20px",
-        marginBottom: "20px",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
-        width: "100%",
-        maxWidth: "600px",
-    },
-
-    row: {
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "16px 18px",
-        cursor: "pointer",
-        fontSize: "15px",
-        fontWeight: "400",
-        transition: "background 0.15s ease",
-    },
-
-    activeRow: {
-        background: "#E5F0FF",
-        color: "#0A84FF",
-        fontWeight: "600",
-        borderRadius: "12px",
-    },
-
-    chevron: {
-        fontSize: "18px",
-        color: "#C7C7CC",
-    },
+  page: {
+    minHeight: "100vh",
+    background: "var(--app-page)",
+    padding: "24px",
+    fontFamily: "'Segoe UI', Arial, sans-serif",
+    color: "var(--app-text)",
+  },
+  shell: {
+    width: "100%",
+    maxWidth: 1040,
+    margin: "0 auto",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    background: "var(--app-panel)",
+    border: "1px solid var(--app-border)",
+    borderTop: "4px solid var(--app-primary)",
+    borderRadius: 6,
+    padding: "16px 18px",
+    marginBottom: 18,
+  },
+  appName: {
+    fontSize: 23,
+    fontWeight: 800,
+    marginBottom: 4,
+  },
+  brandBlock: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    minWidth: 0,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 4,
+    objectFit: "cover",
+    border: "1px solid var(--app-border)",
+    background: "var(--app-panel-alt)",
+    flexShrink: 0,
+  },
+  userLine: {
+    fontSize: 14,
+    color: "var(--app-muted)",
+  },
+  headerActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  logoutButton: {
+    border: "1px solid var(--app-border)",
+    background: "var(--app-panel-alt)",
+    color: "var(--app-text)",
+    borderRadius: 4,
+    padding: "7px 9px",
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  panel: {
+    background: "var(--app-panel)",
+    border: "1px solid var(--app-border)",
+    borderRadius: 6,
+    padding: 18,
+  },
+  panelHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: 16,
+    marginBottom: 14,
+  },
+  title: {
+    margin: 0,
+    fontSize: 22,
+    lineHeight: 1.2,
+  },
+  subtitle: {
+    color: "var(--app-muted)",
+    fontSize: 14,
+  },
+  navList: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 10,
+  },
+  navButton: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    border: "1px solid var(--app-border)",
+    background: "var(--app-panel-alt)",
+    color: "var(--app-text)",
+    borderRadius: 4,
+    padding: "14px 16px",
+    fontSize: 15,
+    fontWeight: 700,
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  navButtonActive: {
+    background: "var(--app-primary-soft)",
+    borderColor: "var(--app-primary)",
+    color: "var(--app-primary-dark)",
+  },
+  navAction: {
+    fontSize: 12,
+    color: "var(--app-muted)",
+    fontWeight: 700,
+  },
 };

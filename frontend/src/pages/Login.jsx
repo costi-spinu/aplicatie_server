@@ -2,7 +2,7 @@ import { useState } from "react";
 import Register from "./Register";
 import ResetParola from "./ResetParola";
 import api from "../services/api";
-import { API_BASE_URL } from "../helpers/appConstants";
+import { API_BASE_URLS } from "../helpers/appConstants";
 import styles from "../styles/iosStyles";
 
 export default function Login({ onLogin, onBack }) {
@@ -24,7 +24,7 @@ export default function Login({ onLogin, onBack }) {
       await onLogin();
     } catch (err) {
       if (!err.response) {
-        setError(`Backend indisponibil la ${API_BASE_URL}`);
+        setError(`Backend indisponibil la ${API_BASE_URLS.join(", ")}`);
         return;
       }
 

@@ -39,9 +39,9 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in {"1", "true", "yes", "on"}
 
-# Backend-ul este apelat de frontend pe portul 8000, folosind acelasi host din
-# browser. Valorile implicite acopera localhost, IP-ul LAN initial si IP-ul
-# Tailscale initial; in productie pot fi extinse cu DJANGO_ALLOWED_HOSTS.
+# Backend-ul poate fi apelat fie pe acelasi origin ca frontend-ul, fie pe portul
+# 8000 ca fallback. Valorile implicite acopera localhost, IP-ul LAN initial si
+# IP-ul Tailscale initial; in productie pot fi extinse cu DJANGO_ALLOWED_HOSTS.
 ALLOWED_HOSTS = env_list(
     "DJANGO_ALLOWED_HOSTS",
     [

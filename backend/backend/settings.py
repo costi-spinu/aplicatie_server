@@ -10,22 +10,71 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
+from datetime import timedelta
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+REPO_DIR = BASE_DIR.parent
+
+
+def env_list(name, default=None):
+    """Return a comma-separated environment variable as a clean list."""
+    value = os.environ.get(name)
+    if value is None:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-c&=!4yxoavqa!yumj010%u-zv$3aze^^-onmasywn$cwgt29)z"
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-c&=!4yxoavqa!yumj010%u-zv$3aze^^-onmasywn$cwgt29)z",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in {"1", "true", "yes", "on"}
 
-ALLOWED_HOSTS = []
+# Backend-ul este apelat de frontend pe portul 8000, folosind acelasi host din
+# browser. Valorile implicite acopera localhost, IP-ul LAN initial si IP-ul
+# Tailscale initial; in productie pot fi extinse cu DJANGO_ALLOWED_HOSTS.
+ALLOWED_HOSTS = env_list(
+    "DJANGO_ALLOWED_HOSTS",
+    [
+        "localhost",
+        "127.0.0.1",
+        "[::1]",
+        "192.168.2.102",
+        "100.75.19.22",
+        ".ts.net",
+    ],
+)
+
+FRONTEND_ORIGINS = env_list(
+    "DJANGO_FRONTEND_ORIGINS",
+    [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://192.168.2.102:5173",
+        "http://192.168.2.102:8080",
+        "http://100.75.19.22:5173",
+        "http://100.75.19.22:8080",
+        "https://localhost:5173",
+        "https://127.0.0.1:5173",
+        "https://localhost:8080",
+        "https://127.0.0.1:8080",
+        "https://192.168.2.102:5173",
+        "https://192.168.2.102:8080",
+        "https://100.75.19.22:5173",
+        "https://100.75.19.22:8080",
+    ],
+)
 
 
 # Application definition
@@ -46,13 +95,12 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
-    "django.middleware.security.SecurityMiddleware",
 ]
 
 ROOT_URLCONF = "backend.urls"
@@ -80,12 +128,12 @@ WSGI_APPLICATION = "backend.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "buget_db",
-        "USER": "postgres",
-        "PASSWORD": "postgres",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "ENGINE": os.environ.get("POSTGRES_ENGINE", "django.db.backends.postgresql"),
+        "NAME": os.environ.get("POSTGRES_DB", "buget_db"),
+        "USER": os.environ.get("POSTGRES_USER", "postgres"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
     }
 }
 
@@ -125,11 +173,20 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
-CORS_ALLOW_ALL_ORIGINS = True
+FRONTEND_DIST_DIR = REPO_DIR / "frontend" / "dist"
+STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.exists() else []
 
-
-from datetime import timedelta
+CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
+CORS_ALLOWED_ORIGIN_REGEXES = env_list(
+    "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
+    [r"^https?://[A-Za-z0-9.-]+\.ts\.net(?::(5173|8080))?$"],
+)
+CSRF_TRUSTED_ORIGINS = FRONTEND_ORIGINS + env_list(
+    "DJANGO_CSRF_TRUSTED_ORIGIN_PATTERNS",
+    ["http://*.ts.net", "https://*.ts.net"],
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -145,18 +202,13 @@ SIMPLE_JWT = {
 
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.gmail.com"
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = "emailul_tau@gmail.com"
-EMAIL_HOST_PASSWORD = "app_password"
-# settings.py
-# STATICFILES_DIRS = [BASE_DIR / "frontend/dist"]
-
-
-import os
-
-STATICFILES_DIRS = []
-
-if os.path.exists(BASE_DIR / "frontend/dist"):
-    STATICFILES_DIRS = [BASE_DIR / "frontend/dist"]
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "True").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "emailul_tau@gmail.com")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "app_password")

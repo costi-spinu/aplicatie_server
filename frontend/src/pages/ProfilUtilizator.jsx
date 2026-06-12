@@ -77,6 +77,7 @@ export default function ProfilUtilizator() {
   });
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const [profileLoadError, setProfileLoadError] = useState("");
   const [passwordForm, setPasswordForm] = useState({
     old_password: "",
     new_password: "",
@@ -166,20 +167,35 @@ export default function ProfilUtilizator() {
   useEffect(() => {
     const init = async () => {
       try {
-        await Promise.all([
-          loadProfile(),
-          loadUsers(),
-          loadBridgeRequests(),
-          loadBridgeConnections(),
-          loadFinancialData(),
-          fetchExchangeRate(),
-        ]);
+        setProfileLoadError("");
+        await loadProfile();
       } catch (err) {
-        console.error(err);
-        setMsg("Nu am putut incarca toate datele de profil.");
-      } finally {
+        console.error("Profilul nu a putut fi incarcat:", err);
+        setProfileLoadError(
+          "Nu am putut incarca profilul. Verifica daca esti autentificat si daca API-ul backend raspunde corect."
+        );
+        setMsg("Nu am putut incarca profilul utilizatorului.");
         setLoading(false);
+        return;
       }
+
+      const optionalResults = await Promise.allSettled([
+        loadUsers(),
+        loadBridgeRequests(),
+        loadBridgeConnections(),
+        loadFinancialData(),
+        fetchExchangeRate(),
+      ]);
+
+      const hasOptionalError = optionalResults.some(
+        (result) => result.status === "rejected"
+      );
+      if (hasOptionalError) {
+        console.warn("Unele date optionale de profil nu au putut fi incarcate.", optionalResults);
+        setMsg("Profilul s-a incarcat, dar unele date optionale nu sunt disponibile momentan.");
+      }
+
+      setLoading(false);
     };
 
     init();
@@ -410,8 +426,18 @@ export default function ProfilUtilizator() {
       .slice(0, 3);
   }, [financialData.fixe, financialData.variabile, ronToEurRate]);
 
-  if (loading || !user || !profile) {
+  if (loading) {
     return <div style={styles.container}>Se incarca...</div>;
+  }
+
+  if (!user || !profile) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.errorBox}>
+          {profileLoadError || "Profilul nu a putut fi incarcat."}
+        </div>
+      </div>
+    );
   }
 
   const tabs = [

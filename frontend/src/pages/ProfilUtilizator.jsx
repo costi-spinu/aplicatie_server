@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import { getCachedApiData } from "../services/apiConfig";
 import styles from "../styles/iosStyles";
+import { prepareMediaValueForApi, resolveMediaUrl } from "../utils/mediaUrl";
 
 const RON_TO_EUR_FALLBACK = 0.2;
 
@@ -55,60 +57,110 @@ const formatAmount = (value, currency = "EUR") =>
     maximumFractionDigits: 2,
   })} ${currency}`;
 
+const getApiErrorMessage = (error, fallback) => {
+  const data = error?.response?.data;
+  if (typeof data === "string" && data.trim()) return data;
+  if (data?.detail) return data.detail;
+
+  if (data && typeof data === "object") {
+    const firstValue = Object.values(data)[0];
+    if (Array.isArray(firstValue) && firstValue[0]) return String(firstValue[0]);
+    if (firstValue) return String(firstValue);
+  }
+
+  return fallback;
+};
+
 const convertToEur = (amount, currency, ronToEurRate) => {
   if (currency === "RON") return round2(toNumber(amount) * ronToEurRate);
   return round2(amount);
 };
 
+const buildUserState = (data) =>
+  data
+    ? {
+        id: data.id,
+        username: data.username || "",
+        first_name: data.first_name || "",
+        last_name: data.last_name || "",
+        email: data.email || "",
+      }
+    : null;
+
+const buildProfileState = (data) => {
+  if (!data) return null;
+  const nextProfile = data.profile || {};
+  const schedules = nextProfile.salary_schedules || [];
+
+  return {
+    poza: "",
+    data_nasterii: "",
+    ocupatia: "",
+    telefon: "",
+    venit_estimat: "",
+    venit_estimat_lunar: "",
+    ...nextProfile,
+    salary_schedules: schedules.length ? schedules : [emptySchedule()],
+  };
+};
+
 export default function ProfilUtilizator() {
+  const cachedProfile = getCachedApiData("profile/");
+  const cachedBridgeConnections = getCachedApiData("bridge/connections/");
+  const cachedRate = getCachedApiData("curs-bnr/");
+  const cachedRonToEurRate =
+    Number(cachedRate?.ron_eur || 0) || RON_TO_EUR_FALLBACK;
+  const cachedEurRonRate = Number(cachedRate?.eur_ron || 0) || null;
+  const cachedFinancialData = {
+    buget: getCachedApiData("buget/lunar/") || null,
+    venituri: getCachedApiData("venituri/") || [],
+    fixe: getCachedApiData("cheltuieli-fixe/") || [],
+    variabile: getCachedApiData("cheltuieli-variabile/") || [],
+    fonduri: getCachedApiData("fonduri/") || {
+      total_eur: 0,
+      total_ron: 0,
+      miscari: [],
+    },
+  };
+
   const [activeTab, setActiveTab] = useState("profile");
-  const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [allUsers, setAllUsers] = useState([]);
+  const [user, setUser] = useState(() => buildUserState(cachedProfile));
+  const [profile, setProfile] = useState(() => buildProfileState(cachedProfile));
+  const [allUsers, setAllUsers] = useState(() => getCachedApiData("users/list/") || []);
   const [selectedUser, setSelectedUser] = useState("");
-  const [bridgeRequests, setBridgeRequests] = useState([]);
-  const [bridgeConnections, setBridgeConnections] = useState([]);
-  const [financialData, setFinancialData] = useState({
-    buget: null,
-    venituri: [],
-    fixe: [],
-    variabile: [],
-    fonduri: { total_eur: 0, total_ron: 0, miscari: [] },
-  });
-  const [loading, setLoading] = useState(true);
+  const [bridgeRequests, setBridgeRequests] = useState(
+    () => getCachedApiData("bridge/requests/") || []
+  );
+  const [bridgeConnections, setBridgeConnections] = useState(() =>
+    Array.isArray(cachedBridgeConnections)
+      ? Array.from(
+          new Map(
+            cachedBridgeConnections.map((item) => [item.user_id || item.id, item])
+          ).values()
+        )
+      : []
+  );
+  const [financialData, setFinancialData] = useState(cachedFinancialData);
+  const [loading, setLoading] = useState(!cachedProfile);
   const [msg, setMsg] = useState("");
+  const [profileLoadError, setProfileLoadError] = useState("");
   const [passwordForm, setPasswordForm] = useState({
     old_password: "",
     new_password: "",
     confirm_password: "",
   });
-  const [ronToEurRate, setRonToEurRate] = useState(RON_TO_EUR_FALLBACK);
-  const [eurRonRate, setEurRonRate] = useState(null);
-  const [rateDate, setRateDate] = useState("");
-  const [rateSource, setRateSource] = useState("fallback");
+  const [ronToEurRate, setRonToEurRate] = useState(cachedRonToEurRate);
+  const [eurRonRate, setEurRonRate] = useState(cachedEurRonRate);
+  const [rateDate, setRateDate] = useState(cachedRate?.date || "");
+  const [rateSource, setRateSource] = useState(cachedRate?.source || "fallback");
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState("");
+  const profilePhotoUrl = resolveMediaUrl(profile?.poza);
+  const photoLoadError = profilePhotoUrl && failedPhotoUrl === profilePhotoUrl;
 
   const loadProfile = useCallback(async () => {
     const res = await api.get("profile/");
-    const nextProfile = res.data.profile || {};
-    const schedules = nextProfile.salary_schedules || [];
-
-    setUser({
-      id: res.data.id,
-      username: res.data.username || "",
-      first_name: res.data.first_name || "",
-      last_name: res.data.last_name || "",
-      email: res.data.email || "",
-    });
-    setProfile({
-      poza: "",
-      data_nasterii: "",
-      ocupatia: "",
-      telefon: "",
-      venit_estimat: "",
-      venit_estimat_lunar: "",
-      ...nextProfile,
-      salary_schedules: schedules.length ? schedules : [emptySchedule()],
-    });
+    setUser(buildUserState(res.data));
+    setProfile(buildProfileState(res.data));
   }, []);
 
   const loadUsers = useCallback(async () => {
@@ -123,7 +175,10 @@ export default function ProfilUtilizator() {
 
   const loadBridgeConnections = useCallback(async () => {
     const res = await api.get("bridge/connections/");
-    setBridgeConnections(res.data || []);
+    const uniqueConnections = Array.from(
+      new Map((res.data || []).map((item) => [item.user_id || item.id, item])).values()
+    );
+    setBridgeConnections(uniqueConnections);
   }, []);
 
   const loadFinancialData = useCallback(async () => {
@@ -166,20 +221,35 @@ export default function ProfilUtilizator() {
   useEffect(() => {
     const init = async () => {
       try {
-        await Promise.all([
-          loadProfile(),
-          loadUsers(),
-          loadBridgeRequests(),
-          loadBridgeConnections(),
-          loadFinancialData(),
-          fetchExchangeRate(),
-        ]);
+        setProfileLoadError("");
+        await loadProfile();
       } catch (err) {
-        console.error(err);
-        setMsg("Nu am putut incarca toate datele de profil.");
-      } finally {
+        console.error("Profilul nu a putut fi incarcat:", err);
+        setProfileLoadError(
+          "Nu am putut incarca profilul. Verifica daca esti autentificat si daca API-ul backend raspunde corect."
+        );
+        setMsg("Nu am putut incarca profilul utilizatorului.");
         setLoading(false);
+        return;
       }
+
+      const optionalResults = await Promise.allSettled([
+        loadUsers(),
+        loadBridgeRequests(),
+        loadBridgeConnections(),
+        loadFinancialData(),
+        fetchExchangeRate(),
+      ]);
+
+      const hasOptionalError = optionalResults.some(
+        (result) => result.status === "rejected"
+      );
+      if (hasOptionalError) {
+        console.warn("Unele date optionale de profil nu au putut fi incarcate.", optionalResults);
+        setMsg("Profilul s-a incarcat, dar unele date optionale nu sunt disponibile momentan.");
+      }
+
+      setLoading(false);
     };
 
     init();
@@ -228,8 +298,18 @@ export default function ProfilUtilizator() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => updateProfileField("poza", reader.result);
+    reader.onload = () => {
+      setFailedPhotoUrl("");
+      updateProfileField("poza", reader.result);
+    };
     reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
+  const removeProfilePhoto = () => {
+    setFailedPhotoUrl("");
+    updateProfileField("poza", "");
+    setMsg("Poza va fi stearsa dupa ce salvezi profilul.");
   };
 
   const buildSalaryPayload = () =>
@@ -255,7 +335,7 @@ export default function ProfilUtilizator() {
         last_name: user.last_name || "",
         email: user.email || "",
         profile: {
-          poza: profile.poza || "",
+          poza: prepareMediaValueForApi(profile.poza),
           data_nasterii: profile.data_nasterii || null,
           ocupatia: profile.ocupatia || "",
           telefon: profile.telefon || "",
@@ -284,7 +364,7 @@ export default function ProfilUtilizator() {
       setMsg("Profil actualizat.");
     } catch (error) {
       console.error(error);
-      setMsg("Eroare la actualizarea profilului.");
+      setMsg(getApiErrorMessage(error, "Eroare la actualizarea profilului."));
     }
   };
 
@@ -311,10 +391,10 @@ export default function ProfilUtilizator() {
     if (!selectedUser) return;
 
     try {
-      await api.post("bridge/send/", { user_id: selectedUser });
+      const response = await api.post("bridge/send/", { user_id: selectedUser });
       setSelectedUser("");
       await Promise.all([loadBridgeRequests(), loadBridgeConnections()]);
-      setMsg("Cerere bridge trimisa.");
+      setMsg(response.data?.message || "Cerere bridge trimisa.");
     } catch {
       setMsg("Eroare la trimiterea cererii bridge.");
     }
@@ -410,8 +490,18 @@ export default function ProfilUtilizator() {
       .slice(0, 3);
   }, [financialData.fixe, financialData.variabile, ronToEurRate]);
 
-  if (loading || !user || !profile) {
+  if (loading) {
     return <div style={styles.container}>Se incarca...</div>;
+  }
+
+  if (!user || !profile) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.errorBox}>
+          {profileLoadError || "Profilul nu a putut fi incarcat."}
+        </div>
+      </div>
+    );
   }
 
   const tabs = [
@@ -459,8 +549,13 @@ export default function ProfilUtilizator() {
       {activeTab === "profile" && (
         <div style={styles.card}>
           <div style={localStyles.profileHeader}>
-            {profile.poza ? (
-              <img src={profile.poza} alt="Profil" style={localStyles.avatar} />
+            {profilePhotoUrl && !photoLoadError ? (
+              <img
+                src={profilePhotoUrl}
+                alt="Profil"
+                style={localStyles.avatar}
+                onError={() => setFailedPhotoUrl(profilePhotoUrl)}
+              />
             ) : (
               <div style={localStyles.avatarPlaceholder}>Profil</div>
             )}
@@ -509,6 +604,26 @@ export default function ProfilUtilizator() {
             />
           </div>
 
+          <div style={localStyles.gridTwo}>
+            <input
+              style={styles.input}
+              type="date"
+              value={profile.data_nasterii || ""}
+              onChange={(e) =>
+                updateProfileField("data_nasterii", e.target.value)
+              }
+            />
+            <input
+              style={styles.input}
+              type="number"
+              value={profile.venit_estimat_lunar || ""}
+              onChange={(e) =>
+                updateProfileField("venit_estimat_lunar", e.target.value)
+              }
+              placeholder="Venit estimat lunar optional"
+            />
+          </div>
+
           <input
             style={styles.input}
             type="email"
@@ -517,20 +632,29 @@ export default function ProfilUtilizator() {
             placeholder="Adresa de email"
           />
 
-          <input
-            style={styles.input}
-            type="file"
-            accept="image/*"
-            onChange={handlePhoto}
-          />
-          {profile.poza && (
+          <div style={localStyles.photoActions}>
+            <label htmlFor="profile-photo-input" style={localStyles.secondaryButton}>
+              {profile.poza ? "Schimba poza" : "Incarca poza"}
+            </label>
+            <input
+              id="profile-photo-input"
+              style={localStyles.hiddenFileInput}
+              type="file"
+              accept="image/*"
+              onChange={handlePhoto}
+            />
             <button
-              style={localStyles.secondaryButton}
-              onClick={() => updateProfileField("poza", "")}
+              type="button"
+              style={{
+                ...localStyles.deletePhotoButton,
+                ...(!profile.poza ? localStyles.disabledButton : {}),
+              }}
+              onClick={removeProfilePhoto}
+              disabled={!profile.poza}
             >
-              Sterge poza profil
+              Sterge poza
             </button>
-          )}
+          </div>
 
           <h3 style={styles.sectionTitle}>Salariu</h3>
           {(profile.salary_schedules || []).map((item, index) => {
@@ -622,11 +746,6 @@ export default function ProfilUtilizator() {
       {activeTab === "financial" && (
         <>
           <div style={localStyles.summaryGrid}>
-            {renderMetric(
-              "Cheltuieli",
-              formatAmount(financialSummary.cheltuieli),
-              financialSummary.perioada
-            )}
             {renderMetric("Venit total", formatAmount(financialSummary.venit))}
             {renderMetric("Sold", formatAmount(financialSummary.sold))}
             {renderMetric(
@@ -916,6 +1035,30 @@ const localStyles = {
     padding: "10px 14px",
     fontWeight: 800,
     cursor: "pointer",
+    textAlign: "center",
+  },
+  photoActions: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gap: 10,
+    marginBottom: 12,
+  },
+  hiddenFileInput: {
+    display: "none",
+  },
+  deletePhotoButton: {
+    width: "100%",
+    border: "1px solid var(--app-danger)",
+    background: "var(--app-danger-soft)",
+    color: "var(--app-danger)",
+    borderRadius: 4,
+    padding: "10px 14px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  disabledButton: {
+    opacity: 0.55,
+    cursor: "not-allowed",
   },
   themeLikeButton: {
     border: "1px solid var(--app-border)",

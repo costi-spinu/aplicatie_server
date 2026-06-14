@@ -17,11 +17,7 @@ export default function AdminPanel() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadUsers();
-    }, 0);
-
-    return () => clearTimeout(timer);
+    void Promise.resolve().then(loadUsers);
   }, [loadUsers]);
 
   const filteredUsers = useMemo(

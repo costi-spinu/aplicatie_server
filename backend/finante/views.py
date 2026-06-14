@@ -1,8 +1,13 @@
+import base64
+import binascii
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 import ipaddress
+from pathlib import Path
+import re
 import secrets
 import socket
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 from django.db import transaction
@@ -23,7 +28,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 
 
 from .models import (
+    Credit,
+    DEFAULT_INVESTMENT_CATEGORIES,
     EmailChangeRequest,
+    InvestitieAutomata,
+    InvestitieCategorie,
     ObiectivCheltuieliGlobal,
     RealizariTarget,
     SalarySchedule,
@@ -40,6 +49,7 @@ from .models import (
 )
 
 from .serializers import (
+    CreditSerializer,
     RegisterSerializer,
     VenitSerializer,
     CheltuialaFixaSerializer,
@@ -47,6 +57,8 @@ from .serializers import (
     CheltuialaVariabilaSerializer,
     EconomieVacantaSerializer,
     EconomieLunaraSerializer,
+    InvestitieAutomataSerializer,
+    InvestitieCategorieSerializer,
     MiscareFondSerializer,
     FondSerializer,
     ObiectivCheltuieliGlobalSerializer,
@@ -71,6 +83,33 @@ class BaseViewSet(viewsets.ModelViewSet):
 
 
 BNR_RATES_URL = "https://www.bnr.ro/nbrfxrates.xml"
+BNR_RATES_CACHE = {"data": None, "fetched_at": None}
+BNR_RATES_CACHE_SECONDS = 6 * 60 * 60
+PROFILE_IMAGE_MIME_EXTENSIONS = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+PROFILE_IMAGE_DATA_URL_RE = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$")
+
+
+def normalize_profile_photo_path(value):
+    if not value:
+        return ""
+    raw_value = str(value).strip()
+    if raw_value.startswith("data:"):
+        return raw_value
+
+    parsed_value = urlparse(raw_value)
+    raw_path = parsed_value.path if parsed_value.scheme else raw_value
+    raw_path = raw_path.split("?", 1)[0].split("#", 1)[0]
+    marker = f"{settings.MEDIA_URL}profile_images/"
+    marker_index = raw_path.find(marker)
+    if marker_index >= 0:
+        return raw_path[marker_index:]
+    return raw_path
 
 
 def current_month_key():
@@ -84,6 +123,38 @@ def parse_decimal_value(value, default="0"):
         return Decimal(default)
 
 
+def quantize_money(value):
+    return parse_decimal_value(value).quantize(Decimal("0.01"))
+
+
+def convert_amount_to_eur(amount, currency, bnr_rates=None):
+    amount = parse_decimal_value(amount)
+    if currency == "RON":
+        rates = bnr_rates
+        if rates is None:
+            try:
+                rates = get_bnr_rates()
+            except Exception:
+                rates = {"ron_eur": Decimal("0.2")}
+        return quantize_money(amount * rates["ron_eur"])
+    return quantize_money(amount)
+
+
+def sum_queryset_amounts_as_eur(queryset):
+    total = Decimal("0")
+    bnr_rates = None
+
+    for item in queryset:
+        if item.moneda == "RON" and bnr_rates is None:
+            try:
+                bnr_rates = get_bnr_rates()
+            except Exception:
+                bnr_rates = {"ron_eur": Decimal("0.2")}
+        total += convert_amount_to_eur(item.suma, item.moneda, bnr_rates)
+
+    return quantize_money(total)
+
+
 def normalize_target_categories(values):
     if not isinstance(values, dict):
         return {}
@@ -91,11 +162,18 @@ def normalize_target_categories(values):
 
 
 def get_bnr_rates():
+    cache_data = BNR_RATES_CACHE["data"]
+    cache_time = BNR_RATES_CACHE["fetched_at"]
+    if cache_data and cache_time:
+        age = (timezone.now() - cache_time).total_seconds()
+        if age < BNR_RATES_CACHE_SECONDS:
+            return cache_data
+
     req = Request(
         BNR_RATES_URL,
         headers={"User-Agent": "buget-app/1.0"},
     )
-    with urlopen(req, timeout=10) as response:
+    with urlopen(req, timeout=3) as response:
         xml_data = response.read()
 
     root = ET.fromstring(xml_data)
@@ -116,11 +194,15 @@ def get_bnr_rates():
     eur_ron = eur_ron / multiplier
     ron_eur = (Decimal("1") / eur_ron).quantize(Decimal("0.000001"))
 
-    return {
+    rates = {
         "date": cube.attrib.get("date") if cube is not None else None,
         "eur_ron": eur_ron,
         "ron_eur": ron_eur,
     }
+    BNR_RATES_CACHE["data"] = rates
+    BNR_RATES_CACHE["fetched_at"] = timezone.now()
+
+    return rates
 
 
 def get_private_ipv4_addresses():
@@ -198,14 +280,17 @@ def iter_auto_fixed_dates(schedule, start, end):
 
 def sync_auto_fixed_expenses_for_user(user, ref_date=None):
     start, end = perioada_bugetara(ref_date)
+    generation_end = min(end, ref_date or timezone.localdate())
     schedules = CheltuialaFixaAutomata.objects.filter(
         user=user,
-        data__lte=end,
+        data__lte=generation_end,
     )
 
     for schedule in schedules:
         expected_dates = (
-            iter_auto_fixed_dates(schedule, start, end) if schedule.activ else []
+            iter_auto_fixed_dates(schedule, start, generation_end)
+            if schedule.activ
+            else []
         )
         current_generated = CheltuialaFixa.objects.filter(
             user=schedule.user,
@@ -219,23 +304,145 @@ def sync_auto_fixed_expenses_for_user(user, ref_date=None):
             current_generated.delete()
 
         for expense_date in expected_dates:
-            CheltuialaFixa.objects.update_or_create(
+            defaults = {
+                "descriere": schedule.denumire,
+                "suma": schedule.suma,
+                "moneda": schedule.moneda,
+                "sursa": "automat",
+            }
+            expense, created = CheltuialaFixa.objects.get_or_create(
                 user=schedule.user,
                 automatizare=schedule,
                 data=expense_date,
-                defaults={
-                    "descriere": schedule.denumire,
-                    "suma": schedule.suma,
-                    "moneda": schedule.moneda,
-                    "sursa": "automat",
-                },
+                defaults=defaults,
             )
+            if created:
+                continue
+            changed_fields = [
+                field for field, value in defaults.items() if getattr(expense, field) != value
+            ]
+            if changed_fields:
+                for field in changed_fields:
+                    setattr(expense, field, defaults[field])
+                expense.save(update_fields=changed_fields)
 
 
 def sync_auto_fixed_expenses_for_users(anchor_user, ref_date=None):
     user_ids = get_connected_user_ids(anchor_user)
     for user in User.objects.filter(id__in=user_ids):
         sync_auto_fixed_expenses_for_user(user, ref_date=ref_date)
+
+
+def investment_category_response_items(user_ids):
+    items = [
+        {
+            "id": None,
+            "value": value,
+            "label": label,
+            "default": True,
+        }
+        for value, label in DEFAULT_INVESTMENT_CATEGORIES
+    ]
+    seen_values = {item["value"] for item in items}
+
+    for category in InvestitieCategorie.objects.filter(user_id__in=user_ids):
+        if category.value in seen_values:
+            continue
+        seen_values.add(category.value)
+        items.append(
+            {
+                "id": category.id,
+                "value": category.value,
+                "label": category.label,
+                "default": False,
+            }
+        )
+
+    return items
+
+
+def iter_auto_investment_dates(schedule, start, end):
+    if schedule.data > end:
+        return []
+
+    month_delta = (start.year - schedule.data.year) * 12 + start.month - schedule.data.month
+    first_step = max(0, month_delta - 1)
+    dates = set()
+    step = first_step
+
+    while True:
+        month_anchor = add_months(schedule.data, step)
+        if month_anchor > end:
+            break
+
+        last_day = monthrange(month_anchor.year, month_anchor.month)[1]
+        occurrence = date(
+            month_anchor.year,
+            month_anchor.month,
+            min(schedule.data.day, last_day),
+        )
+        if start <= occurrence <= end and occurrence >= schedule.data:
+            dates.add(occurrence)
+
+        step += 1
+
+    return sorted(dates)
+
+
+def sync_auto_investments_for_user(user, ref_date=None):
+    start, end = perioada_bugetara(ref_date)
+    generation_end = min(end, ref_date or timezone.localdate())
+    schedules = InvestitieAutomata.objects.filter(
+        user=user,
+        data__lte=generation_end,
+    )
+
+    for schedule in schedules:
+        expected_dates = (
+            iter_auto_investment_dates(schedule, start, generation_end)
+            if schedule.activ
+            else []
+        )
+        current_generated = MiscareFond.objects.filter(
+            user=schedule.user,
+            automatizare=schedule,
+            data__range=(start, end),
+        )
+
+        if expected_dates:
+            current_generated.exclude(data__in=expected_dates).delete()
+        else:
+            current_generated.delete()
+
+        for investment_date in expected_dates:
+            defaults = {
+                "tip": "adauga",
+                "rubrica": schedule.rubrica,
+                "suma_eur": abs(schedule.suma_eur) if schedule.suma_eur else None,
+                "suma_ron": abs(schedule.suma_ron) if schedule.suma_ron else None,
+                "observatii": schedule.denumire or "Investitie automata",
+            }
+            movement, created = MiscareFond.objects.get_or_create(
+                user=schedule.user,
+                automatizare=schedule,
+                data=investment_date,
+                defaults=defaults,
+            )
+            if created:
+                continue
+            changed_fields = [
+                field for field, value in defaults.items() if getattr(movement, field) != value
+            ]
+            if changed_fields:
+                for field in changed_fields:
+                    setattr(movement, field, defaults[field])
+                movement.save(update_fields=changed_fields)
+
+
+def sync_auto_investments_for_users(anchor_user, ref_date=None):
+    user_ids = get_connected_user_ids(anchor_user)
+    for user in User.objects.filter(id__in=user_ids):
+        sync_auto_investments_for_user(user, ref_date=ref_date)
 
 
 class VenitViewSet(BaseViewSet):
@@ -255,13 +462,18 @@ class VenitViewSet(BaseViewSet):
         return queryset
 
 
+class CreditViewSet(BaseViewSet):
+    queryset = Credit.objects.all()
+    serializer_class = CreditSerializer
+
+
 class CheltuialaFixaViewSet(BaseViewSet):
     queryset = CheltuialaFixa.objects.all()
     serializer_class = CheltuialaFixaSerializer
 
     def get_queryset(self):
         sync_auto_fixed_expenses_for_users(self.request.user)
-        return super().get_queryset()
+        return super().get_queryset().exclude(sursa="automat")
 
 
 class CheltuialaFixaAutomataViewSet(BaseViewSet):
@@ -290,10 +502,57 @@ class CheltuialaVariabilaViewSet(BaseViewSet):
     queryset = CheltuialaVariabila.objects.all()
     serializer_class = CheltuialaVariabilaSerializer
 
+    def normalize_amount_kwargs(self, serializer):
+        if serializer.validated_data.get("moneda") != "RON":
+            return {}
+        return {
+            "suma": convert_amount_to_eur(serializer.validated_data.get("suma"), "RON"),
+            "moneda": "EUR",
+        }
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user, **self.normalize_amount_kwargs(serializer))
+
+    def perform_update(self, serializer):
+        serializer.save(**self.normalize_amount_kwargs(serializer))
+
 
 class EconomieVacantaViewSet(BaseViewSet):
     queryset = EconomieVacanta.objects.all()
     serializer_class = EconomieVacantaSerializer
+
+
+class InvestitieCategorieViewSet(BaseViewSet):
+    queryset = InvestitieCategorie.objects.all()
+    serializer_class = InvestitieCategorieSerializer
+
+    def get_queryset(self):
+        return self.queryset.filter(user=self.request.user)
+
+
+class InvestitieAutomataViewSet(BaseViewSet):
+    queryset = InvestitieAutomata.objects.all()
+    serializer_class = InvestitieAutomataSerializer
+
+    def get_queryset(self):
+        return super().get_queryset().order_by("data", "id")
+
+    def perform_create(self, serializer):
+        instance = serializer.save(user=self.request.user)
+        sync_auto_investments_for_user(instance.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        sync_auto_investments_for_user(instance.user)
+
+    def perform_destroy(self, instance):
+        start, end = perioada_bugetara()
+        MiscareFond.objects.filter(
+            user=instance.user,
+            automatizare=instance,
+            data__range=(start, end),
+        ).delete()
+        instance.delete()
 
 
 def sync_salary_income(user):
@@ -350,10 +609,82 @@ class SalaryScheduleViewSet(BaseViewSet):
         instance.delete()
 
 
-def serialize_profile_response(user):
+def remove_profile_photo_file(value):
+    value = normalize_profile_photo_path(value)
+    if not value or not str(value).startswith(settings.MEDIA_URL):
+        return
+
+    relative_path = str(value)[len(settings.MEDIA_URL) :].lstrip("/")
+    if not relative_path.startswith("profile_images/"):
+        return
+
+    photo_path = (Path(settings.MEDIA_ROOT) / relative_path).resolve()
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    if media_root in photo_path.parents and photo_path.exists():
+        photo_path.unlink()
+
+
+def save_profile_photo_value(user, value, previous_value=""):
+    if value in (None, ""):
+        remove_profile_photo_file(previous_value)
+        return ""
+
+    if not isinstance(value, str):
+        return previous_value or ""
+
+    match = PROFILE_IMAGE_DATA_URL_RE.match(value)
+    if not match:
+        return normalize_profile_photo_path(value)
+
+    mime_type, encoded_content = match.groups()
+    extension = PROFILE_IMAGE_MIME_EXTENSIONS.get(mime_type.lower())
+    if not extension:
+        raise ValueError("Formatul imaginii nu este acceptat.")
+
+    try:
+        image_content = base64.b64decode(encoded_content, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Imaginea incarcata nu este valida.") from exc
+
+    if len(image_content) > 5 * 1024 * 1024:
+        raise ValueError("Imaginea trebuie sa fie mai mica de 5 MB.")
+
+    remove_profile_photo_file(previous_value)
+
+    image_dir = Path(settings.MEDIA_ROOT) / "profile_images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"user_{user.id}.{extension}"
+    image_path = image_dir / filename
+    image_path.write_bytes(image_content)
+
+    return f"{settings.MEDIA_URL}profile_images/{filename}"
+
+
+def build_profile_photo_url(request, value, version=None):
+    if not value:
+        return ""
+    if str(value).startswith(("http://", "https://", "data:")):
+        url = value
+    elif request and str(value).startswith("/"):
+        url = request.build_absolute_uri(value)
+    else:
+        url = value
+
+    if version and not str(url).startswith("data:"):
+        separator = "&" if "?" in str(url) else "?"
+        return f"{url}{separator}v={version}"
+    return url
+
+
+def serialize_profile_response(user, request=None):
     profile, _ = UserProfile.objects.get_or_create(user=user)
     sync_salary_income(user)
     data = UserProfileSerializer(profile).data
+    data["poza"] = build_profile_photo_url(
+        request,
+        data.get("poza"),
+        version=int(profile.updated_at.timestamp()) if profile.updated_at else None,
+    )
     return {
         "id": user.id,
         "username": user.username,
@@ -370,47 +701,65 @@ def profile(request):
     profile_obj, _ = UserProfile.objects.get_or_create(user=request.user)
 
     if request.method == "GET":
-        return Response(serialize_profile_response(request.user))
+        return Response(serialize_profile_response(request.user, request))
 
-    user_update_fields = []
-    username = request.data.get("username")
-    if username:
-        exists = (
-            User.objects.exclude(id=request.user.id).filter(username=username).exists()
+    with transaction.atomic():
+        profile_data = dict(request.data.get("profile", {}))
+        if "poza" in profile_data:
+            try:
+                profile_data["poza"] = save_profile_photo_value(
+                    request.user,
+                    profile_data.get("poza"),
+                    profile_obj.poza,
+                )
+            except ValueError as exc:
+                return Response({"poza": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_update_fields = []
+        username = request.data.get("username")
+        if username:
+            exists = (
+                User.objects.exclude(id=request.user.id).filter(username=username).exists()
+            )
+            if exists:
+                return Response({"username": "Acest username există deja."}, status=400)
+            if username != request.user.username:
+                request.user.username = username
+                user_update_fields.append("username")
+
+        email = request.data.get("email")
+        if email and email != request.user.email:
+            exists = (
+                User.objects.exclude(id=request.user.id)
+                .filter(email__iexact=email)
+                .exists()
+            )
+            if exists:
+                return Response({"email": "Email-ul este deja folosit."}, status=400)
+            request.user.email = email.strip().lower()
+            user_update_fields.append("email")
+
+        first_name = request.data.get("first_name")
+        last_name = request.data.get("last_name")
+        if first_name is not None:
+            request.user.first_name = first_name
+            user_update_fields.append("first_name")
+        if last_name is not None:
+            request.user.last_name = last_name
+            user_update_fields.append("last_name")
+
+        serializer = UserProfileSerializer(
+            profile_obj, data=profile_data, partial=True
         )
-        if exists:
-            return Response({"username": "Acest username există deja."}, status=400)
-        if username != request.user.username:
-            request.user.username = username
-            user_update_fields.append("username")
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    email = request.data.get("email")
-    if email and email != request.user.email:
-        exists = User.objects.exclude(id=request.user.id).filter(email__iexact=email).exists()
-        if exists:
-            return Response({"email": "Email-ul este deja folosit."}, status=400)
-        request.user.email = email.strip().lower()
-        user_update_fields.append("email")
+        if user_update_fields:
+            request.user.save(update_fields=sorted(set(user_update_fields)))
+        serializer.save()
 
-    first_name = request.data.get("first_name")
-    last_name = request.data.get("last_name")
-    if first_name is not None:
-        request.user.first_name = first_name
-        user_update_fields.append("first_name")
-    if last_name is not None:
-        request.user.last_name = last_name
-        user_update_fields.append("last_name")
-    if user_update_fields:
-        request.user.save(update_fields=sorted(set(user_update_fields)))
-
-    serializer = UserProfileSerializer(
-        profile_obj, data=request.data.get("profile", {}), partial=True
-    )
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    serializer.save()
     sync_salary_income(request.user)
-    return Response(serialize_profile_response(request.user))
+    return Response(serialize_profile_response(request.user, request))
 
 
 @api_view(["POST"])
@@ -615,6 +964,75 @@ def perioada_bugetara(ref_date=None):
     return start, end
 
 
+def deduction_date_for_period(start):
+    return date(start.year, start.month, 27)
+
+
+def get_auto_fixed_deduction_total(user_ids, start, end, ref_date=None):
+    ref_date = ref_date or timezone.localdate()
+    deduction_date = deduction_date_for_period(start)
+    if ref_date < deduction_date:
+        return Decimal("0.00")
+
+    total = Decimal("0")
+    bnr_rates = None
+    schedules = CheltuialaFixaAutomata.objects.filter(
+        user_id__in=user_ids,
+        activ=True,
+        data__lte=end,
+    )
+
+    for schedule in schedules:
+        occurrence_count = len(iter_auto_fixed_dates(schedule, start, end))
+        if not occurrence_count:
+            continue
+
+        if schedule.moneda == "RON" and bnr_rates is None:
+            try:
+                bnr_rates = get_bnr_rates()
+            except Exception:
+                bnr_rates = {"ron_eur": Decimal("0.2")}
+
+        total += (
+            convert_amount_to_eur(schedule.suma, schedule.moneda, bnr_rates)
+            * occurrence_count
+        )
+
+    return quantize_money(total)
+
+
+def get_income_summary(user_ids, start, end, ref_date=None):
+    venit_brut = (
+        Venit.objects.filter(
+            user_id__in=user_ids,
+            data__range=(start, end),
+        ).aggregate(total=Sum("suma"))["total"]
+        or Decimal("0")
+    )
+    deduceri_credite = sum_queryset_amounts_as_eur(
+        Credit.objects.filter(
+            user_id__in=user_ids,
+            data__range=(start, end),
+        )
+    )
+    deduceri_automate = get_auto_fixed_deduction_total(
+        user_ids,
+        start,
+        end,
+        ref_date=ref_date,
+    )
+    deduceri_total = quantize_money(deduceri_credite + deduceri_automate)
+    venit_net = quantize_money(venit_brut - deduceri_total)
+
+    return {
+        "venit_brut": quantize_money(venit_brut),
+        "deduceri_credite": deduceri_credite,
+        "deduceri_automate": deduceri_automate,
+        "deduceri_total": deduceri_total,
+        "venit_net": venit_net,
+    }
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def venit_total_lunar(request):
@@ -625,21 +1043,17 @@ def venit_total_lunar(request):
     end = date(today.year, today.month, last_day)
 
     user_ids = get_connected_user_ids(request.user)
-
-    total = (
-        Venit.objects.filter(
-            user_id__in=user_ids,
-            data__gte=start,
-            data__lte=end,
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
-    )
+    income_summary = get_income_summary(user_ids, start, end, ref_date=today)
 
     return Response(
         {
             "start": start,
             "end": end,
-            "venit_total": total,
+            "venit_total": income_summary["venit_net"],
+            "venit_brut": income_summary["venit_brut"],
+            "deduceri_credite": income_summary["deduceri_credite"],
+            "deduceri_automate": income_summary["deduceri_automate"],
+            "deduceri_total": income_summary["deduceri_total"],
         }
     )
 
@@ -655,7 +1069,7 @@ def me(request):
             "first_name": user.first_name,
             "last_name": user.last_name,
             "email": user.email,
-            "profile": serialize_profile_response(user).get("profile"),
+            "profile": serialize_profile_response(user, request).get("profile"),
             "is_admin": user.is_staff or user.is_superuser,
         }
     )
@@ -666,32 +1080,28 @@ def me(request):
 def buget_lunar(request):
     start, end = perioada_bugetara()
     user_ids = get_connected_user_ids(request.user)
-    sync_auto_fixed_expenses_for_users(request.user)
-
-    venit = (
-        Venit.objects.filter(
-            user_id__in=user_ids,
-            data__range=(start, end),
-        ).aggregate(
-            total=Sum("suma")
-        )["total"]
-        or 0
+    income_summary = get_income_summary(
+        user_ids,
+        start,
+        end,
+        ref_date=timezone.localdate(),
     )
 
-    total_fixe = (
+    venit = income_summary["venit_net"]
+
+    total_fixe = sum_queryset_amounts_as_eur(
         CheltuialaFixa.objects.filter(
             user_id__in=user_ids,
             data__range=(start, end),
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
+        )
+        .exclude(sursa="automat")
     )
 
-    total_variabile = (
+    total_variabile = sum_queryset_amounts_as_eur(
         CheltuialaVariabila.objects.filter(
             user_id__in=user_ids,
             data__range=(start, end),
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
+        )
     )
 
     total_cheltuieli = total_fixe + total_variabile
@@ -700,6 +1110,10 @@ def buget_lunar(request):
         {
             "luna": f"{start} – {end}",
             "venit": venit,
+            "venit_brut": income_summary["venit_brut"],
+            "deduceri_credite": income_summary["deduceri_credite"],
+            "deduceri_automate": income_summary["deduceri_automate"],
+            "deduceri_total": income_summary["deduceri_total"],
             "cheltuieli": total_cheltuieli,
             "fixe": total_fixe,
             "variabile": total_variabile,
@@ -713,27 +1127,49 @@ def buget_lunar(request):
 def grafice_luna(request):
     start, end = perioada_bugetara()
     user_ids = get_connected_user_ids(request.user)
+    income_summary = get_income_summary(
+        user_ids,
+        start,
+        end,
+        ref_date=timezone.localdate(),
+    )
 
-    cheltuieli = (
-        CheltuialaVariabila.objects.filter(
-            user_id__in=user_ids, data__range=(start, end)
+    cheltuieli_by_category = {}
+    for expense in CheltuialaVariabila.objects.filter(
+        user_id__in=user_ids,
+        data__range=(start, end),
+    ):
+        cheltuieli_by_category.setdefault(expense.categorie, Decimal("0.00"))
+        cheltuieli_by_category[expense.categorie] += convert_amount_to_eur(
+            expense.suma,
+            expense.moneda,
         )
-        .values("categorie")
-        .annotate(total=Sum("suma"))
+    cheltuieli = [
+        {"categorie": categorie, "total": quantize_money(total)}
+        for categorie, total in cheltuieli_by_category.items()
+    ]
+    venit = income_summary["venit_net"]
+    total_fixe = sum_queryset_amounts_as_eur(
+        CheltuialaFixa.objects.filter(
+            user_id__in=user_ids,
+            data__range=(start, end),
+        ).exclude(sursa="automat")
     )
-    venit = (
-        Venit.objects.filter(user_id__in=user_ids, data__range=(start, end)).aggregate(
-            total=Sum("suma")
-        )["total"]
-        or 0
-    )
+    total_variabile = sum(c["total"] for c in cheltuieli)
+    total_cheltuieli = total_fixe + total_variabile
 
     return Response(
         {
             "luna": f"{start} – {end}",
             "venit": venit,
-            "cheltuieli": list(cheltuieli),
-            "economii": venit - sum(c["total"] for c in cheltuieli),
+            "venit_brut": income_summary["venit_brut"],
+            "deduceri_credite": income_summary["deduceri_credite"],
+            "deduceri_automate": income_summary["deduceri_automate"],
+            "deduceri_total": income_summary["deduceri_total"],
+            "fixe": total_fixe,
+            "cheltuieli_total": total_cheltuieli,
+            "cheltuieli": cheltuieli,
+            "economii": venit - total_cheltuieli,
         }
     )
 
@@ -744,29 +1180,25 @@ def calculeaza_economii_luna(request):
     start, end = perioada_bugetara()
     luna = f"{start.year}-{start.month:02d}"
     user_ids = get_connected_user_ids(request.user)
-
-    venit = (
-        Venit.objects.filter(
-            user_id__in=user_ids,
-            data__range=(start, end),
-        ).aggregate(
-            total=Sum("suma")
-        )["total"]
-        or 0
+    income_summary = get_income_summary(
+        user_ids,
+        start,
+        end,
+        ref_date=timezone.localdate(),
     )
+    venit = income_summary["venit_net"]
 
-    cheltuieli = (
+    cheltuieli = sum_queryset_amounts_as_eur(
         CheltuialaFixa.objects.filter(
             user_id__in=user_ids,
             data__range=(start, end),
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
-    ) + (
+        )
+        .exclude(sursa="automat")
+    ) + sum_queryset_amounts_as_eur(
         CheltuialaVariabila.objects.filter(
             user_id__in=user_ids,
             data__range=(start, end),
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
+        )
     )
 
     economie = venit - cheltuieli
@@ -781,6 +1213,10 @@ def calculeaza_economii_luna(request):
         {
             "luna": luna,
             "venit": venit,
+            "venit_brut": income_summary["venit_brut"],
+            "deduceri_credite": income_summary["deduceri_credite"],
+            "deduceri_automate": income_summary["deduceri_automate"],
+            "deduceri_total": income_summary["deduceri_total"],
             "cheltuieli": cheltuieli,
             "economie": economie,
         }
@@ -798,18 +1234,23 @@ def istoric_economii(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def economii_vacanta_sumar(request):
-    puse = (
-        EconomieVacanta.objects.filter(user=request.user, tip="economii").aggregate(
-            total=Sum("suma")
-        )["total"]
-        or 0
+    user_ids = get_connected_user_ids(request.user)
+    puse = sum_queryset_amounts_as_eur(
+        EconomieVacanta.objects.filter(user_id__in=user_ids, tip="economii")
+    ) + sum_queryset_amounts_as_eur(
+        CheltuialaVariabila.objects.filter(
+            user_id__in=user_ids,
+            categorie="vacanta",
+        )
     )
 
-    cheltuite = (
+    cheltuite = sum_queryset_amounts_as_eur(
+        EconomieVacanta.objects.filter(user_id__in=user_ids, tip="cheltuieli")
+    ) + sum_queryset_amounts_as_eur(
         CheltuialaVariabila.objects.filter(
-            user=request.user, categorie="vacanta"
-        ).aggregate(total=Sum("suma"))["total"]
-        or 0
+            user_id__in=user_ids,
+            categorie="vacanta_cheltuita",
+        )
     )
 
     return Response(
@@ -821,10 +1262,20 @@ def economii_vacanta_sumar(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def categorii_investitii(request):
+    user_ids = get_connected_user_ids(request.user)
+    return Response(investment_category_response_items(user_ids))
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def miscare_fond(request):
-    serializer = MiscareFondSerializer(data=request.data)
+    serializer = MiscareFondSerializer(
+        data=request.data,
+        context={"request": request},
+    )
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -837,9 +1288,15 @@ def miscare_fond(request):
         if miscare.suma_ron:
             miscare.suma_ron = -abs(miscare.suma_ron)
         miscare.save()
+    elif miscare.tip == "adauga":
+        if miscare.suma_eur:
+            miscare.suma_eur = abs(miscare.suma_eur)
+        if miscare.suma_ron:
+            miscare.suma_ron = abs(miscare.suma_ron)
+        miscare.save()
 
     return Response(
-        MiscareFondSerializer(miscare).data,
+        MiscareFondSerializer(miscare, context={"request": request}).data,
         status=status.HTTP_201_CREATED,
     )
 
@@ -860,7 +1317,12 @@ def miscare_fond_detail(request, pk):
         miscare.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    serializer = MiscareFondSerializer(miscare, data=request.data, partial=True)
+    serializer = MiscareFondSerializer(
+        miscare,
+        data=request.data,
+        partial=True,
+        context={"request": request},
+    )
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -879,26 +1341,28 @@ def miscare_fond_detail(request, pk):
             miscare.suma_ron = abs(miscare.suma_ron)
         miscare.save()
 
-    return Response(MiscareFondSerializer(miscare).data)
+    return Response(MiscareFondSerializer(miscare, context={"request": request}).data)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def fonduri(request):
     user_ids = get_connected_user_ids(request.user)
+    sync_auto_investments_for_users(request.user)
 
     qs = MiscareFond.objects.filter(user_id__in=user_ids)
 
     total_eur = qs.aggregate(total=Sum("suma_eur"))["total"] or 0
     total_ron = qs.aggregate(total=Sum("suma_ron"))["total"] or 0
 
-    serializer = MiscareFondSerializer(qs, many=True)
+    serializer = MiscareFondSerializer(qs, many=True, context={"request": request})
 
     return Response(
         {
             "total_eur": total_eur,
             "total_ron": total_ron,
             "miscari": serializer.data,
+            "categorii": investment_category_response_items(user_ids),
         }
     )
 
@@ -906,7 +1370,10 @@ def fonduri(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def fonduri_grafic(request):
-    qs = MiscareFond.objects.filter(user=request.user)
+    user_ids = get_connected_user_ids(request.user)
+    sync_auto_investments_for_users(request.user)
+
+    qs = MiscareFond.objects.filter(user_id__in=user_ids)
 
     total_eur = qs.aggregate(total=Sum("suma_eur"))["total"] or 0
     total_ron = qs.aggregate(total=Sum("suma_ron"))["total"] or 0
@@ -922,8 +1389,11 @@ def fonduri_grafic(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def fonduri_grafic_timeline(request):
+    user_ids = get_connected_user_ids(request.user)
+    sync_auto_investments_for_users(request.user)
+
     qs = (
-        MiscareFond.objects.filter(user=request.user)
+        MiscareFond.objects.filter(user_id__in=user_ids)
         .annotate(zi=TruncDate("data"))
         .values("zi")
         .annotate(
@@ -1057,17 +1527,23 @@ def delete_user(request, pk):
                 Q(user=user) | Q(new_email__iexact=deleted_email)
             ).delete()
             UserBridge.objects.filter(Q(from_user=user) | Q(to_user=user)).delete()
+            Credit.objects.filter(user=user).delete()
             Venit.objects.filter(user=user).delete()
             CheltuialaFixa.objects.filter(user=user).delete()
             CheltuialaFixaAutomata.objects.filter(user=user).delete()
             CheltuialaVariabila.objects.filter(user=user).delete()
             EconomieVacanta.objects.filter(user=user).delete()
             EconomieLunara.objects.filter(user=user).delete()
+            InvestitieAutomata.objects.filter(user=user).delete()
+            InvestitieCategorie.objects.filter(user=user).delete()
             MiscareFond.objects.filter(user=user).delete()
             Fond.objects.filter(user=user).delete()
             RealizariTarget.objects.filter(user=user).delete()
             ObiectivCheltuieliGlobal.objects.filter(user=user).delete()
             SalarySchedule.objects.filter(user=user).delete()
+            profile_obj = UserProfile.objects.filter(user=user).first()
+            if profile_obj:
+                remove_profile_photo_file(profile_obj.poza)
             UserProfile.objects.filter(user=user).delete()
 
             user.email = f"deleted-{user.pk}@deleted.local"
@@ -1131,6 +1607,24 @@ def send_bridge(request):
     if not to_user_id:
         return Response({"error": "User required"}, status=400)
 
+    if str(to_user_id) == str(request.user.id):
+        return Response({"error": "Nu poti trimite bridge catre contul tau."}, status=400)
+
+    existing = UserBridge.objects.filter(
+        Q(from_user=request.user, to_user_id=to_user_id)
+        | Q(from_user_id=to_user_id, to_user=request.user)
+    ).first()
+
+    if existing:
+        return Response(
+            {
+                "success": True,
+                "id": existing.id,
+                "accepted": existing.accepted,
+                "message": "Exista deja o cerere sau conexiune bridge.",
+            }
+        )
+
     UserBridge.objects.create(from_user=request.user, to_user_id=to_user_id)
 
     return Response({"success": True})
@@ -1151,7 +1645,13 @@ def accept_bridge(request, pk):
 def bridge_requests(request):
     bridges = UserBridge.objects.filter(to_user=request.user, accepted=False)
 
-    data = [{"id": b.id, "from_user": b.from_user.username} for b in bridges]
+    data = []
+    seen_user_ids = set()
+    for bridge in bridges:
+        if bridge.from_user_id in seen_user_ids:
+            continue
+        seen_user_ids.add(bridge.from_user_id)
+        data.append({"id": bridge.id, "from_user": bridge.from_user.username})
 
     return Response(data)
 
@@ -1164,10 +1664,14 @@ def bridge_connections(request):
     )
 
     data = []
+    seen_user_ids = set()
     for bridge in bridges:
         connected_user = (
             bridge.to_user if bridge.from_user_id == request.user.id else bridge.from_user
         )
+        if connected_user.id in seen_user_ids:
+            continue
+        seen_user_ids.add(connected_user.id)
         data.append(
             {
                 "id": bridge.id,
@@ -1186,12 +1690,17 @@ def get_connected_user_ids(user):
     )
 
     connected_user_ids = []
+    seen_user_ids = {user.id}
 
     for bridge in bridges:
         if bridge.from_user_id == user.id:
-            connected_user_ids.append(bridge.to_user_id)
+            connected_user_id = bridge.to_user_id
         else:
-            connected_user_ids.append(bridge.from_user_id)
+            connected_user_id = bridge.from_user_id
+
+        if connected_user_id not in seen_user_ids:
+            seen_user_ids.add(connected_user_id)
+            connected_user_ids.append(connected_user_id)
 
     return [user.id] + connected_user_ids
 
@@ -1203,6 +1712,7 @@ def get_connected_user_ids(user):
 @permission_classes([IsAuthenticated])
 def fonduri_grafic_timeline_extended(request):
     user_ids = get_connected_user_ids(request.user)
+    sync_auto_investments_for_users(request.user)
 
     # TOTAL (toți conectați)
     qs_total = (

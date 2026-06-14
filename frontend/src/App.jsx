@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import api from "./services/api";
+import { clearApiDataCache, preloadApiData } from "./services/apiConfig";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -20,6 +21,52 @@ const clearAuthStorage = () => {
   localStorage.removeItem("refresh");
 };
 
+const PAGE_PRELOAD_ENDPOINTS = {
+  venit: [
+    "curs-bnr/",
+    "venituri/",
+    "me/",
+    "salary-schedules/",
+    "credite/",
+    "buget/lunar/",
+  ],
+  cheltuieli: [
+    "curs-bnr/",
+    "cheltuieli-fixe/",
+    "cheltuieli-variabile/",
+    "cheltuieli-fixe-automate/",
+    "buget/lunar/",
+    "venituri/",
+    "credite/",
+    "realizari-targets/",
+    "obiective-cheltuieli-global/",
+  ],
+  economii: ["venituri/", "cheltuieli-fixe/", "cheltuieli-variabile/"],
+  fonduri: ["fonduri/", "fonduri/categorii/", "investitii-automate/"],
+  realizari: [
+    "realizari-targets/",
+    "obiective-cheltuieli-global/",
+    "cheltuieli-fixe/",
+    "cheltuieli-variabile/",
+  ],
+  profil: [
+    "profile/",
+    "users/list/",
+    "bridge/requests/",
+    "bridge/connections/",
+    "buget/lunar/",
+    "venituri/",
+    "cheltuieli-fixe/",
+    "cheltuieli-variabile/",
+    "fonduri/",
+    "curs-bnr/",
+  ],
+};
+
+const STARTUP_PRELOAD_ENDPOINTS = Array.from(
+  new Set(Object.values(PAGE_PRELOAD_ENDPOINTS).flat())
+);
+
 function App() {
   const [activePage, setActivePage] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -28,15 +75,19 @@ function App() {
   );
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(loggedIn);
+  const [pageLoading, setPageLoading] = useState(false);
   const [authView, setAuthView] = useState("home");
+  const openPageRequestId = useRef(0);
 
   const loadCurrentUser = useCallback(async () => {
     try {
       const res = await api.get("me/");
       setUser(res.data);
       setLoggedIn(true);
+      void preloadApiData(STARTUP_PRELOAD_ENDPOINTS);
     } catch {
       clearAuthStorage();
+      clearApiDataCache();
       setLoggedIn(false);
       setUser(null);
     } finally {
@@ -67,7 +118,9 @@ function App() {
   const isAdmin = user?.is_admin === true || user?.is_superuser === true;
 
   const logout = () => {
+    openPageRequestId.current += 1;
     clearAuthStorage();
+    clearApiDataCache();
     setLoggedIn(false);
     setUser(null);
     setAuthView("home");
@@ -75,14 +128,23 @@ function App() {
     setShowSidebar(true);
   };
 
-  const handleOpenPage = (pageKey) => {
-    setActivePage(pageKey);
+  const handleOpenPage = async (pageKey) => {
+    const requestId = openPageRequestId.current + 1;
+    openPageRequestId.current = requestId;
+    setActivePage(null);
     setShowSidebar(false);
+    setPageLoading(true);
+    await preloadApiData(PAGE_PRELOAD_ENDPOINTS[pageKey] || []);
+    if (openPageRequestId.current !== requestId) return;
+    setActivePage(pageKey);
+    setPageLoading(false);
   };
 
   const handleBack = () => {
+    openPageRequestId.current += 1;
     setActivePage(null);
     setShowSidebar(true);
+    setPageLoading(false);
   };
 
   if (loading) {
@@ -134,8 +196,9 @@ function App() {
             </div>
           </div>
           <div style={styles.pageContent}>
+            {pageLoading && <div style={styles.loading}>Se incarca datele...</div>}
             {activePage === "venit" && <Venit />}
-            {activePage === "cheltuieli" && <Cheltuieli />}
+            {activePage === "cheltuieli" && <Cheltuieli user={user} />}
             {activePage === "economii" && <Economii />}
             {activePage === "fonduri" && <Fonduri />}
             {activePage === "realizari" && <Realizari />}

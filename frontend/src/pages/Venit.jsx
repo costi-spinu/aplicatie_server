@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import { getCachedApiData } from "../services/apiConfig";
 import styles from "../styles/iosStyles";
 
 const RON_TO_EUR_FALLBACK = 0.2;
@@ -29,6 +30,7 @@ const toDateOnly = (value) => {
 
 const round2 = (value) => Math.round(value * 100) / 100;
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
+const getIncomeMonthKey = (item) => String(item.data || "").slice(0, 7);
 const todayIso = () => new Date().toISOString().split("T")[0];
 const emptySalaryForm = {
   data: todayIso(),
@@ -37,25 +39,72 @@ const emptySalaryForm = {
   moneda: "RON",
   activ: true,
 };
+const emptyIncomeSummary = {
+  venitBrut: 0,
+  deduceriCredite: 0,
+  deduceriAutomate: 0,
+  deduceriTotal: 0,
+  venitNet: 0,
+};
+
+const buildIncomeSummary = (data) => ({
+  venitBrut: Number(data?.venit_brut || 0),
+  deduceriCredite: Number(data?.deduceri_credite || 0),
+  deduceriAutomate: Number(data?.deduceri_automate || 0),
+  deduceriTotal: Number(data?.deduceri_total || 0),
+  venitNet: Number(data?.venit || 0),
+});
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
 export default function Venit() {
+  const cachedVenituri = getCachedApiData("venituri/");
+  const cachedMe = getCachedApiData("me/");
+  const cachedSalarySchedules = getCachedApiData("salary-schedules/");
+  const cachedCredits = getCachedApiData("credite/");
+  const cachedBudget = getCachedApiData("buget/lunar/");
+  const cachedIncomeSummary = cachedBudget
+    ? buildIncomeSummary(cachedBudget)
+    : emptyIncomeSummary;
+  const cachedRate = getCachedApiData("curs-bnr/");
+  const cachedRonToEurRate =
+    Number(cachedRate?.ron_eur || 0) || RON_TO_EUR_FALLBACK;
+  const cachedEurRonRate = Number(cachedRate?.eur_ron || 0) || null;
+
   const [activeTab, setActiveTab] = useState("form");
   const [suma, setSuma] = useState("");
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(cachedMe || null);
   const [moneda, setMoneda] = useState("EUR");
   const [data, setData] = useState(new Date().toISOString().split("T")[0]);
-  const [allVenituri, setAllVenituri] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [allVenituri, setAllVenituri] = useState(() =>
+    Array.isArray(cachedVenituri) ? cachedVenituri : []
+  );
+  const [total, setTotal] = useState(cachedIncomeSummary.venitNet);
   const [editId, setEditId] = useState(null);
   const [msg, setMsg] = useState(null);
-  const [ronToEurRate, setRonToEurRate] = useState(RON_TO_EUR_FALLBACK);
-  const [eurRonRate, setEurRonRate] = useState(null);
-  const [rateDate, setRateDate] = useState("");
-  const [rateSource, setRateSource] = useState("fallback");
-  const [olderVenituri, setOlderVenituri] = useState([]);
-  const [salarySchedules, setSalarySchedules] = useState([]);
+  const [ronToEurRate, setRonToEurRate] = useState(cachedRonToEurRate);
+  const [eurRonRate, setEurRonRate] = useState(cachedEurRonRate);
+  const [rateDate, setRateDate] = useState(cachedRate?.date || "");
+  const [rateSource, setRateSource] = useState(cachedRate?.source || "fallback");
+  const [selectedHistoryMonth, setSelectedHistoryMonth] = useState("");
+  const [salarySchedules, setSalarySchedules] = useState(() =>
+    Array.isArray(cachedSalarySchedules) ? cachedSalarySchedules : []
+  );
   const [salaryForm, setSalaryForm] = useState(emptySalaryForm);
   const [salaryEditId, setSalaryEditId] = useState(null);
+  const [credits, setCredits] = useState(() =>
+    Array.isArray(cachedCredits) ? cachedCredits : []
+  );
+  const [creditEditId, setCreditEditId] = useState(null);
+  const [creditDenumire, setCreditDenumire] = useState("");
+  const [creditSuma, setCreditSuma] = useState("");
+  const [creditMoneda, setCreditMoneda] = useState("EUR");
+  const [creditData, setCreditData] = useState(todayIso());
+  const [incomeSummary, setIncomeSummary] = useState(cachedIncomeSummary);
 
   const cycleRange = useMemo(() => getCurrentCycleRange(), []);
   const formatDateTime = (dt) => new Date(dt).toLocaleString("ro-RO");
@@ -104,17 +153,20 @@ export default function Venit() {
 
   const loadData = useCallback(async () => {
     try {
-      const [older, all, meRes, salaryRes] = await Promise.all([
-        api.get("venituri/?archived=1"),
+      const [all, meRes, salaryRes, creditsRes, budgetRes] = await Promise.all([
         api.get("venituri/"),
         api.get("me/"),
         api.get("salary-schedules/"),
+        api.get("credite/"),
+        api.get("buget/lunar/"),
       ]);
-      setOlderVenituri(older.data || []);
+      const nextIncomeSummary = buildIncomeSummary(budgetRes.data);
       setAllVenituri(all.data || []);
-      setTotal(calculateCurrentCycleTotal(all.data || []));
+      setTotal(nextIncomeSummary.venitNet || calculateCurrentCycleTotal(all.data || []));
       setCurrentUser(meRes.data);
       setSalarySchedules(salaryRes.data || []);
+      setCredits(creditsRes.data || []);
+      setIncomeSummary(nextIncomeSummary);
     } catch (err) {
       console.error("Eroare venit:", err);
     }
@@ -125,11 +177,7 @@ export default function Venit() {
   }, [fetchExchangeRate]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-
-    return () => clearTimeout(timer);
+    loadData();
   }, [loadData]);
 
   const resetForm = () => {
@@ -142,6 +190,14 @@ export default function Venit() {
   const resetSalaryForm = () => {
     setSalaryForm({ ...emptySalaryForm, data: todayIso() });
     setSalaryEditId(null);
+  };
+
+  const resetCreditForm = () => {
+    setCreditEditId(null);
+    setCreditDenumire("");
+    setCreditSuma("");
+    setCreditMoneda("EUR");
+    setCreditData(todayIso());
   };
 
   const adaugaVenit = async () => {
@@ -158,7 +214,7 @@ export default function Venit() {
       );
 
       resetForm();
-      loadData();
+      await loadData();
     } catch {
       setMsg("Eroare la adaugare");
     }
@@ -182,7 +238,7 @@ export default function Venit() {
       );
 
       resetForm();
-      loadData();
+      await loadData();
     } catch {
       setMsg("Eroare la modificare");
     }
@@ -193,7 +249,7 @@ export default function Venit() {
 
     try {
       await api.delete(`venituri/${id}/`);
-      loadData();
+      await loadData();
     } catch {
       setMsg("Eroare la stergere");
     }
@@ -203,17 +259,64 @@ export default function Venit() {
     suma && moneda === "RON"
       ? `aprox. ${round2(Number(suma) * ronToEurRate)} EUR`
       : null;
-  const currentMonthVenituri = useMemo(
+  const recordsVenituri = useMemo(
     () =>
       allVenituri
-        .filter((item) => String(item.data || "").slice(0, 7) === getCurrentMonthKey())
-        .sort((a, b) => new Date(b.data) - new Date(a.data)),
+        .slice()
+        .sort((a, b) => {
+          const dateDiff = new Date(b.data) - new Date(a.data);
+          if (dateDiff !== 0) return dateDiff;
+          return Number(b.id || 0) - Number(a.id || 0);
+        }),
     [allVenituri]
+  );
+  const monthlyIncomeRows = useMemo(() => {
+    const totals = allVenituri.reduce((acc, item) => {
+      const key = getIncomeMonthKey(item);
+      if (!key) return acc;
+      acc[key] = (acc[key] || 0) + Number(item.suma || 0);
+      return acc;
+    }, {});
+
+    return Object.entries(totals)
+      .map(([key, sum]) => ({ key, sum }))
+      .filter((item) => item.key < getCurrentMonthKey())
+      .sort((a, b) => b.key.localeCompare(a.key));
+  }, [allVenituri]);
+  const normalizedSelectedHistoryMonth =
+    selectedHistoryMonth &&
+    monthlyIncomeRows.some((item) => item.key === selectedHistoryMonth)
+      ? selectedHistoryMonth
+      : monthlyIncomeRows[0]?.key || "";
+  const selectedHistoryRows = useMemo(
+    () =>
+      recordsVenituri.filter(
+        (item) => getIncomeMonthKey(item) === normalizedSelectedHistoryMonth
+      ),
+    [normalizedSelectedHistoryMonth, recordsVenituri]
+  );
+  const selectedHistoryTotal = selectedHistoryRows.reduce(
+    (acc, item) => acc + Number(item.suma || 0),
+    0
   );
   const salaryPreviewEur =
     salaryForm.suma && salaryForm.moneda === "RON"
       ? round2(Number(salaryForm.suma) * ronToEurRate)
       : null;
+  const creditPreviewEur =
+    creditSuma && creditMoneda === "RON"
+      ? round2(Number(creditSuma) * ronToEurRate)
+      : null;
+  const currentCycleCredits = useMemo(
+    () =>
+      credits
+        .filter((item) => {
+          const creditDate = toDateOnly(item.data);
+          return creditDate >= cycleRange.start && creditDate <= cycleRange.end;
+        })
+        .sort((a, b) => new Date(b.data) - new Date(a.data)),
+    [credits, cycleRange]
+  );
   const rateLabel =
     rateSource === "BNR" && eurRonRate
       ? `Curs BNR: 1 EUR = ${eurRonRate} RON${rateDate ? ` (${rateDate})` : ""}`
@@ -272,9 +375,60 @@ export default function Venit() {
     }
   };
 
+  const saveCredit = async () => {
+    if (!creditDenumire.trim() || !creditSuma || !creditData) {
+      setMsg("Completeaza denumirea, suma si data creditului.");
+      return;
+    }
+
+    const sumaInEur = round2(convertToEur(creditSuma, creditMoneda));
+    const payload = {
+      denumire: creditDenumire.trim(),
+      suma: sumaInEur,
+      moneda: "EUR",
+      data: creditData,
+    };
+
+    try {
+      if (creditEditId) {
+        await api.put(`credite/${creditEditId}/`, payload);
+        setMsg("Credit modificat");
+      } else {
+        await api.post("credite/", payload);
+        setMsg("Credit salvat");
+      }
+
+      resetCreditForm();
+      await loadData();
+    } catch {
+      setMsg("Eroare la salvarea creditului");
+    }
+  };
+
+  const startCreditEdit = (item) => {
+    setCreditEditId(item.id);
+    setCreditDenumire(item.denumire || "");
+    setCreditSuma(item.suma || "");
+    setCreditMoneda(item.moneda || "EUR");
+    setCreditData(item.data || todayIso());
+  };
+
+  const deleteCredit = async (id) => {
+    if (!window.confirm("Sigur stergi acest credit?")) return;
+
+    try {
+      await api.delete(`credite/${id}/`);
+      if (creditEditId === id) resetCreditForm();
+      await loadData();
+      setMsg("Credit sters");
+    } catch {
+      setMsg("Eroare la stergerea creditului");
+    }
+  };
+
   const exportExcel = () => {
     const header = "Data,Suma,Moneda,Utilizator,Sursa\n";
-    const rows = olderVenituri
+    const rows = selectedHistoryRows
       .map(
         (v) =>
           `${v.data},${v.suma},${v.moneda},${v.username || currentUser?.username || ""},${v.sursa || "manual"}`
@@ -286,23 +440,40 @@ export default function Venit() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "venituri-vechi.xls";
+    link.download = `venituri-${normalizedSelectedHistoryMonth || "istoric"}.xls`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   const exportPdf = () => {
-    const rows = olderVenituri
+    const rows = selectedHistoryRows
       .map(
         (v) =>
-          `<tr><td>${v.data}</td><td>${v.suma}</td><td>${v.moneda}</td><td>${v.username || currentUser?.username || ""}</td></tr>`
+          `<tr><td>${escapeHtml(v.data)}</td><td>${escapeHtml(v.suma)}</td><td>${escapeHtml(v.moneda)}</td><td>${escapeHtml(v.username || currentUser?.username || "")}</td><td>${escapeHtml(v.sursa || "manual")}</td></tr>`
       )
       .join("");
     const win = window.open("", "_blank");
+    if (!win) return;
     win.document.write(
-      `<html><head><title>Venituri vechi</title></head><body><h1>Venituri vechi</h1><table border="1" cellspacing="0" cellpadding="6"><thead><tr><th>Data</th><th>Suma</th><th>Moneda</th><th>Utilizator</th></tr></thead><tbody>${rows}</tbody></table></body></html>`
+      `<!doctype html><html><head><meta charset="UTF-8" /><title>Venituri ${escapeHtml(normalizedSelectedHistoryMonth)}</title><style>
+        body { font-family: Segoe UI, Arial, sans-serif; color: #10201a; margin: 28px; }
+        h1 { font-size: 22px; margin: 0 0 6px; }
+        .meta { color: #5f6f66; font-size: 12px; margin-bottom: 16px; }
+        .total { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #cfd8d3; padding: 7px 8px; text-align: left; font-size: 12px; }
+        th { background: #eef2f1; font-weight: 700; }
+        tr { page-break-inside: avoid; }
+        @media print { body { margin: 14mm; } }
+      </style></head><body>
+        <h1>Venituri ${escapeHtml(normalizedSelectedHistoryMonth)}</h1>
+        <div class="meta">Generat la ${escapeHtml(new Date().toLocaleString("ro-RO"))}</div>
+        <div class="total">Total venit luna selectata: ${selectedHistoryTotal.toFixed(2)} EUR</div>
+        <table><thead><tr><th>Data</th><th>Suma</th><th>Moneda</th><th>Utilizator</th><th>Sursa</th></tr></thead><tbody>${rows}</tbody></table>
+      </body></html>`
     );
     win.document.close();
+    win.focus();
     win.print();
   };
 
@@ -332,6 +503,15 @@ export default function Venit() {
         <button
           style={{
             ...localStyles.segmentBtn,
+            ...(activeTab === "credits" ? localStyles.segmentBtnActive : {}),
+          }}
+          onClick={() => setActiveTab("credits")}
+        >
+          Credite
+        </button>
+        <button
+          style={{
+            ...localStyles.segmentBtn,
             ...(activeTab === "records" ? localStyles.segmentBtnActive : {}),
           }}
           onClick={() => setActiveTab("records")}
@@ -354,10 +534,24 @@ export default function Venit() {
         <>
           <div style={styles.heroCard}>
             <div style={styles.heroLabel}>
-              Total pe interval curent ({formatDate(cycleRange.start)} -{" "}
+              Venit disponibil ({formatDate(cycleRange.start)} -{" "}
               {formatDate(cycleRange.end)})
             </div>
-            <div style={styles.heroValue}>{total} EUR</div>
+            <div style={styles.heroValue}>{total.toFixed(2)} EUR</div>
+            <div style={localStyles.summaryLines}>
+              <div>
+                <span>Venit brut</span>
+                <strong>{incomeSummary.venitBrut.toFixed(2)} EUR</strong>
+              </div>
+              <div>
+                <span>Scazut credite</span>
+                <strong>-{incomeSummary.deduceriCredite.toFixed(2)} EUR</strong>
+              </div>
+              <div>
+                <span>Scazut automate pe 27</span>
+                <strong>-{incomeSummary.deduceriAutomate.toFixed(2)} EUR</strong>
+              </div>
+            </div>
             <div style={localStyles.rateText}>
               Curs BNR:{" "}
               {eurRonRate ? `1 EUR = ${eurRonRate} RON` : `${ronToEurRate} EUR/RON`}{" "}
@@ -520,15 +714,101 @@ export default function Venit() {
         </>
       )}
 
+      {activeTab === "credits" && (
+        <>
+          {msg && <div style={styles.message}>{msg}</div>}
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>
+              {creditEditId ? "Modifica credit" : "Adauga credit"}
+            </h3>
+            <input
+              style={styles.input}
+              value={creditDenumire}
+              placeholder="Denumire credit"
+              onChange={(e) => setCreditDenumire(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              type="number"
+              placeholder="Suma"
+              value={creditSuma}
+              onChange={(e) => setCreditSuma(e.target.value)}
+            />
+            <select
+              style={styles.input}
+              value={creditMoneda}
+              onChange={(e) => setCreditMoneda(e.target.value)}
+            >
+              <option value="EUR">EUR</option>
+              <option value="RON">RON / LEI</option>
+            </select>
+            {creditPreviewEur !== null && (
+              <div style={localStyles.previewText}>
+                Conversie automata: {creditPreviewEur.toFixed(2)} EUR.{" "}
+                {rateLabel}
+              </div>
+            )}
+            <input
+              style={styles.input}
+              type="date"
+              value={creditData}
+              onChange={(e) => setCreditData(e.target.value)}
+            />
+            <div style={localStyles.formActions}>
+              <button style={styles.blueButton} onClick={saveCredit}>
+                {creditEditId ? "Salveaza credit" : "Adauga credit"}
+              </button>
+              {creditEditId && (
+                <button style={localStyles.secondaryBtn} onClick={resetCreditForm}>
+                  Anuleaza
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>Credite in intervalul curent</h3>
+            <div style={localStyles.historyTotal}>
+              <span>Total scazut din venit</span>
+              <strong>{incomeSummary.deduceriCredite.toFixed(2)} EUR</strong>
+            </div>
+            {currentCycleCredits.length === 0 && (
+              <div style={styles.message}>Nu exista credite in intervalul curent.</div>
+            )}
+            {currentCycleCredits.map((item) => (
+              <div key={item.id} style={styles.row}>
+                <div>
+                  <div style={styles.amount}>{item.denumire}</div>
+                  <div style={localStyles.userText}>
+                    {item.suma} {item.moneda} - {item.data}
+                  </div>
+                </div>
+                <div style={localStyles.rowActions}>
+                  <button
+                    style={localStyles.editBtn}
+                    onClick={() => startCreditEdit(item)}
+                  >
+                    Edit
+                  </button>
+                  <button style={styles.deleteBtn} onClick={() => deleteCredit(item.id)}>
+                    Sterge
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       {activeTab === "records" && (
         <div style={styles.card}>
-          <h3 style={styles.sectionTitle}>Inregistrari luna curenta</h3>
-          {currentMonthVenituri.length === 0 && (
+          <h3 style={styles.sectionTitle}>Inregistrari venit</h3>
+          {recordsVenituri.length === 0 && (
             <div style={styles.message}>
-              Nu exista venituri inregistrate in luna curenta.
+              Nu exista venituri inregistrate.
             </div>
           )}
-          {currentMonthVenituri.map((v) => (
+          {recordsVenituri.map((v) => (
             <div
               key={v.id}
               style={{
@@ -574,6 +854,30 @@ export default function Venit() {
       {activeTab === "older" && (
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>Istoric venit</h3>
+          {monthlyIncomeRows.length === 0 && (
+            <div style={styles.message}>
+              Nu exista venituri in lunile precedente.
+            </div>
+          )}
+          {monthlyIncomeRows.length > 0 && (
+            <>
+              <select
+                style={styles.input}
+                value={normalizedSelectedHistoryMonth}
+                onChange={(e) => setSelectedHistoryMonth(e.target.value)}
+              >
+                {monthlyIncomeRows.map((row) => (
+                  <option key={row.key} value={row.key}>
+                    {row.key} - {row.sum.toFixed(2)} EUR
+                  </option>
+                ))}
+              </select>
+              <div style={localStyles.historyTotal}>
+                <span>Total venit luna selectata</span>
+                <strong>{selectedHistoryTotal.toFixed(2)} EUR</strong>
+              </div>
+            </>
+          )}
           <div style={localStyles.exportActions}>
             <button style={styles.blueButton} onClick={exportExcel}>
               Export Excel
@@ -582,10 +886,7 @@ export default function Venit() {
               Export PDF
             </button>
           </div>
-          {olderVenituri.length === 0 && (
-            <div style={styles.message}>Nu exista venituri in istoric.</div>
-          )}
-          {olderVenituri.map((v) => (
+          {selectedHistoryRows.map((v) => (
             <div
               key={v.id}
               style={{
@@ -635,7 +936,7 @@ const localStyles = {
   segmentWrapper: {
     width: "100%",
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
     border: "1px solid var(--app-border)",
     borderRadius: 4,
     overflow: "hidden",
@@ -660,6 +961,13 @@ const localStyles = {
     fontSize: 12,
     color: "var(--app-muted)",
   },
+  summaryLines: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+    gap: 8,
+    marginTop: 12,
+    fontSize: 13,
+  },
   previewText: {
     marginBottom: 12,
     fontSize: 13,
@@ -674,6 +982,17 @@ const localStyles = {
     gridTemplateColumns: "1fr 1fr",
     gap: 10,
     marginBottom: 12,
+  },
+  historyTotal: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    border: "1px solid var(--app-border)",
+    borderRadius: 4,
+    padding: "10px 12px",
+    marginBottom: 12,
+    background: "var(--app-panel-alt)",
   },
   checkRow: {
     display: "flex",

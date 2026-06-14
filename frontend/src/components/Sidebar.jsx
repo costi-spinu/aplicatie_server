@@ -1,10 +1,13 @@
 import { useState } from "react";
 import AppControls from "./AppControls";
 import InstallAppButton from "./InstallAppButton";
+import { resolveMediaUrl } from "../utils/mediaUrl";
 
 export default function Sidebar({ setPage, isAdmin, logout, user }) {
   const [active, setActive] = useState(null);
-  const profilePhoto = user?.profile?.poza;
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState("");
+  const profilePhoto = resolveMediaUrl(user?.profile?.poza);
+  const photoLoadError = profilePhoto && failedPhotoUrl === profilePhoto;
   const displayName =
     [user?.first_name, user?.last_name].filter(Boolean).join(" ") ||
     user?.username ||
@@ -33,8 +36,13 @@ export default function Sidebar({ setPage, isAdmin, logout, user }) {
       <div style={styles.shell}>
         <header style={styles.header}>
           <div style={styles.brandBlock}>
-            {profilePhoto && (
-              <img src={profilePhoto} alt="Profil" style={styles.avatar} />
+            {profilePhoto && !photoLoadError && (
+              <img
+                src={profilePhoto}
+                alt="Profil"
+                style={styles.avatar}
+                onError={() => setFailedPhotoUrl(profilePhoto)}
+              />
             )}
             <div>
               <div style={styles.appName}>Buget & Economii</div>

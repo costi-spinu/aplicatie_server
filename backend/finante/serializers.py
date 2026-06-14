@@ -1,9 +1,15 @@
 from django.contrib.auth.models import User
+from django.utils.text import slugify
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from .models import Fond, MiscareFond
+from .utils_users import get_connected_user_ids
 
 from .models import (
+    Credit,
+    DEFAULT_INVESTMENT_CATEGORIES,
+    InvestitieAutomata,
+    InvestitieCategorie,
     Venit,
     CheltuialaFixa,
     CheltuialaFixaAutomata,
@@ -15,6 +21,39 @@ from .models import (
     UserProfile,
     SalarySchedule,
 )
+
+
+DEFAULT_INVESTMENT_CATEGORY_VALUES = {
+    value for value, _label in DEFAULT_INVESTMENT_CATEGORIES
+}
+
+
+def investment_category_exists(user, value):
+    if not value:
+        return False
+    if value in DEFAULT_INVESTMENT_CATEGORY_VALUES:
+        return True
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    return InvestitieCategorie.objects.filter(
+        user_id__in=get_connected_user_ids(user),
+        value=value,
+    ).exists()
+
+
+def build_unique_investment_category_value(user, label):
+    base_value = slugify(label or "")[:50] or "investitie"
+    value = base_value
+    suffix = 2
+
+    while (
+        value in DEFAULT_INVESTMENT_CATEGORY_VALUES
+        or InvestitieCategorie.objects.filter(user=user, value=value).exists()
+    ):
+        value = f"{base_value[:50]}-{suffix}"
+        suffix += 1
+
+    return value
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -47,6 +86,24 @@ class VenitSerializer(serializers.ModelSerializer):
         model = Venit
         exclude = ("user",)
         read_only_fields = ("created_at", "updated_at", "salary_schedule")
+
+
+class CreditSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+
+    class Meta:
+        model = Credit
+        fields = (
+            "id",
+            "denumire",
+            "suma",
+            "moneda",
+            "data",
+            "username",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_at", "updated_at")
 
 
 class CheltuialaFixaSerializer(serializers.ModelSerializer):
@@ -122,14 +179,83 @@ class FondSerializer(serializers.ModelSerializer):
 
 class MiscareFondSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="user.username", read_only=True)
+    rubrica = serializers.CharField(max_length=60)
 
     class Meta:
         model = MiscareFond
         exclude = ("user",)
+        read_only_fields = ("automatizare",)
 
     def validate(self, data):
         if not data.get("suma_eur") and not data.get("suma_ron"):
             raise serializers.ValidationError("Trebuie completată suma în EUR sau RON")
+
+        request = self.context.get("request")
+        user = request.user if request else None
+        value = data.get("rubrica") or getattr(self.instance, "rubrica", None)
+        if not investment_category_exists(user, value):
+            raise serializers.ValidationError(
+                {"rubrica": "Categoria de investitie nu exista."}
+            )
+
+        return data
+
+
+class InvestitieCategorieSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InvestitieCategorie
+        fields = ("id", "value", "label", "created_at")
+        read_only_fields = ("id", "value", "created_at")
+
+    def validate_label(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Denumirea categoriei este obligatorie.")
+        return value
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = request.user
+        label = validated_data["label"].strip()
+        return InvestitieCategorie.objects.create(
+            user=user,
+            label=label,
+            value=build_unique_investment_category_value(user, label),
+        )
+
+
+class InvestitieAutomataSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+    rubrica = serializers.CharField(max_length=60)
+
+    class Meta:
+        model = InvestitieAutomata
+        fields = (
+            "id",
+            "denumire",
+            "data",
+            "rubrica",
+            "suma_eur",
+            "suma_ron",
+            "activ",
+            "username",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_at", "updated_at")
+
+    def validate(self, data):
+        if not data.get("suma_eur") and not data.get("suma_ron"):
+            raise serializers.ValidationError("Trebuie completată suma în EUR sau RON")
+
+        request = self.context.get("request")
+        user = request.user if request else None
+        value = data.get("rubrica") or getattr(self.instance, "rubrica", None)
+        if not investment_category_exists(user, value):
+            raise serializers.ValidationError(
+                {"rubrica": "Categoria de investitie nu exista."}
+            )
+
         return data
 
 

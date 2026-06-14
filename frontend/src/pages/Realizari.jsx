@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import { getCachedApiData } from "../services/apiConfig";
 import styles from "../styles/iosStyles";
 
 const STORAGE_KEY = "realizari_targets_by_month_v1";
@@ -61,16 +62,46 @@ const hasTargetValues = (target) =>
   );
 
 export default function Realizari() {
+  const initialCurrentMonthKey = getMonthKey();
+  const cachedTargetsByMonth = normalizeApiTargets(
+    getCachedApiData("realizari-targets/") || []
+  );
+  const cachedGlobalTarget = normalizeApiTarget(
+    getCachedApiData("obiective-cheltuieli-global/")
+  );
+  const cachedFormTarget = hasTargetValues(cachedGlobalTarget)
+    ? cachedGlobalTarget
+    : cachedTargetsByMonth[initialCurrentMonthKey] || cachedGlobalTarget;
+  const cachedFixe = getCachedApiData("cheltuieli-fixe/");
+  const cachedVariabile = getCachedApiData("cheltuieli-variabile/");
+
   const [activeTab, setActiveTab] = useState("curent");
   const [selectedHistoryMonth, setSelectedHistoryMonth] = useState("");
-  const [fixedTargetInput, setFixedTargetInput] = useState("");
-  const [categoryTargetInputs, setCategoryTargetInputs] = useState(
-    buildEmptyCategoryTargets()
+  const [fixedTargetInput, setFixedTargetInput] = useState(
+    cachedFormTarget?.fixedTarget ? String(cachedFormTarget.fixedTarget) : ""
   );
-  const [targetsByMonth, setTargetsByMonth] = useState({});
-  const [globalTarget, setGlobalTarget] = useState(null);
-  const [fixe, setFixe] = useState([]);
-  const [variabile, setVariabile] = useState([]);
+  const [categoryTargetInputs, setCategoryTargetInputs] = useState(
+    () =>
+      cachedFormTarget
+        ? categoryKeys.reduce(
+            (acc, key) => ({
+              ...acc,
+              [key]: cachedFormTarget.categoryTargets?.[key]
+                ? String(cachedFormTarget.categoryTargets[key])
+                : "",
+            }),
+            {}
+          )
+        : buildEmptyCategoryTargets()
+  );
+  const [targetsByMonth, setTargetsByMonth] = useState(cachedTargetsByMonth);
+  const [globalTarget, setGlobalTarget] = useState(cachedGlobalTarget);
+  const [fixe, setFixe] = useState(() =>
+    Array.isArray(cachedFixe) ? cachedFixe : []
+  );
+  const [variabile, setVariabile] = useState(() =>
+    Array.isArray(cachedVariabile) ? cachedVariabile : []
+  );
   const [msg, setMsg] = useState("");
 
   const currentMonthKey = getMonthKey();
@@ -154,23 +185,23 @@ export default function Realizari() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
+    void Promise.resolve().then(() =>
       Promise.all([loadTargets(), loadExpenses()]).catch(() =>
         setMsg("Eroare la incarcarea datelor")
-      );
-    }, 0);
-
-    return () => clearTimeout(timer);
+      )
+    );
   }, [loadExpenses, loadTargets]);
 
   const actualByMonth = useMemo(() => {
     const fixed = {};
     const variableByCategory = {};
 
-    fixe.forEach((item) => {
-      const key = getMonthKey(item.data);
-      fixed[key] = (fixed[key] || 0) + Number(item.suma || 0);
-    });
+    fixe
+      .filter((item) => item.sursa !== "automat")
+      .forEach((item) => {
+        const key = getMonthKey(item.data);
+        fixed[key] = (fixed[key] || 0) + Number(item.suma || 0);
+      });
 
     variabile
       .filter((item) => item.categorie !== "vacanta_cheltuita")
@@ -188,8 +219,8 @@ export default function Realizari() {
   const getEffectiveTarget = useCallback(
     (key) =>
       targetsByMonth[key] ||
-      (key >= currentMonthKey && hasTargetValues(globalTarget) ? globalTarget : null),
-    [currentMonthKey, globalTarget, targetsByMonth]
+      (hasTargetValues(globalTarget) ? globalTarget : null),
+    [globalTarget, targetsByMonth]
   );
 
   const buildMonthSummary = useCallback(
@@ -223,14 +254,20 @@ export default function Realizari() {
   );
 
   const currentSummary = buildMonthSummary(currentMonthKey);
-  const historyMonthKeys = Object.keys(targetsByMonth)
-    .filter((key) => key < currentMonthKey)
-    .sort((a, b) => b.localeCompare(a));
-  const normalizedSelectedHistoryMonth = historyMonthKeys.includes(
-    selectedHistoryMonth
-  )
-    ? selectedHistoryMonth
-    : "";
+  const historyMonthKeys = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...Object.keys(targetsByMonth),
+          ...Object.keys(actualByMonth.fixed),
+          ...Object.keys(actualByMonth.variableByCategory),
+          currentMonthKey,
+        ])
+      ).sort((a, b) => b.localeCompare(a)),
+    [actualByMonth, currentMonthKey, targetsByMonth]
+  );
+  const normalizedSelectedHistoryMonth =
+    selectedHistoryMonth || historyMonthKeys[0] || currentMonthKey;
   const selectedHistorySummary = normalizedSelectedHistoryMonth
     ? buildMonthSummary(normalizedSelectedHistoryMonth)
     : null;
@@ -403,24 +440,18 @@ export default function Realizari() {
 
       {activeTab === "istoric" && (
         <>
-          {historyMonthKeys.length === 0 && (
-            <div style={styles.message}>Nu exista inca luni in istoric.</div>
-          )}
-          {historyMonthKeys.length > 0 && (
-            <div style={styles.card}>
-              <h3 style={styles.sectionTitle}>Selecteaza luna</h3>
-              <select
-                style={styles.input}
-                value={normalizedSelectedHistoryMonth}
-                onChange={(event) => setSelectedHistoryMonth(event.target.value)}
-              >
-                <option value="">Selecteaza luna</option>
-                {historyMonthKeys.map((key) => (
-                  <option key={key} value={key}>
-                    {key}
-                  </option>
-                ))}
-              </select>
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>Selecteaza luna</h3>
+            <input
+              type="month"
+              style={styles.input}
+              value={normalizedSelectedHistoryMonth}
+              onChange={(event) => setSelectedHistoryMonth(event.target.value)}
+            />
+          </div>
+          {!selectedHistorySummary && (
+            <div style={styles.message}>
+              Nu exista obiective pentru luna selectata.
             </div>
           )}
           {selectedHistorySummary && renderSummaryCard(selectedHistorySummary)}

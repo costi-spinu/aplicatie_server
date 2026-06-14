@@ -40,6 +40,17 @@ class TipVacanta(models.TextChoices):
     CHELTUIELI = "cheltuieli", "Cheltuieli"
 
 
+DEFAULT_INVESTMENT_CATEGORIES = (
+    ("fond_urgenta", "Fond de urgență"),
+    ("trading212", "Investiții - Trading212"),
+    ("xtb", "Investiții - XTB"),
+    ("revolut", "Investiții - Revolut"),
+    ("tradeville", "Investiții - Tradeville"),
+    ("cont_economii", "Cont de economii"),
+    ("alte_investitii", "Alte investiții"),
+)
+
+
 class Venit(models.Model):
     user = models.ForeignKey(
         User,
@@ -66,6 +77,26 @@ class Venit(models.Model):
 
     def __str__(self):
         return f"{self.user.username} | {self.suma} {self.moneda}"
+
+
+class Credit(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="credite",
+    )
+    denumire = models.CharField(max_length=120)
+    suma = models.DecimalField(max_digits=10, decimal_places=2)
+    moneda = models.CharField(max_length=3, choices=Moneda.choices)
+    data = models.DateField(default=timezone.localdate)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-data", "-id"]
+
+    def __str__(self):
+        return f"{self.user.username} | {self.denumire} | {self.suma} {self.moneda}"
 
 
 class CheltuialaFixa(models.Model):
@@ -237,16 +268,6 @@ class MiscareFond(models.Model):
         ("retrage", "Retrage"),
     )
 
-    RUBRICI = (
-        ("fond_urgenta", "Fond de urgență"),
-        ("trading212", "Investiții - Trading212"),
-        ("xtb", "Investiții - XTB"),
-        ("revolut", "Investiții - Revolut"),
-        ("tradeville", "Investiții - Tradeville"),
-        ("cont_economii", "Cont de economii"),
-        ("alte_investitii", "Alte investiții"),
-    )
-
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -254,9 +275,15 @@ class MiscareFond(models.Model):
     )
     tip = models.CharField(max_length=10, choices=TIP)
     rubrica = models.CharField(
-        max_length=30,
-        choices=RUBRICI,
+        max_length=60,
         default="alte_investitii",
+    )
+    automatizare = models.ForeignKey(
+        "InvestitieAutomata",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="miscari_generate",
     )
     suma_eur = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
@@ -265,13 +292,57 @@ class MiscareFond(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True
     )
     observatii = models.TextField(blank=True)
-    data = models.DateField(auto_now_add=True)
+    data = models.DateField(default=timezone.localdate)
 
     class Meta:
         ordering = ["-data"]
 
     def __str__(self):
         return f"{self.user.username} | {self.tip} | EUR:{self.suma_eur} RON:{self.suma_ron}"
+
+
+class InvestitieCategorie(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="categorii_investitii",
+    )
+    value = models.SlugField(max_length=60)
+    label = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "value")
+        ordering = ["label", "id"]
+
+    def __str__(self):
+        return f"{self.user.username} | {self.label}"
+
+
+class InvestitieAutomata(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="investitii_automate",
+    )
+    denumire = models.CharField(max_length=120, blank=True, default="")
+    data = models.DateField(default=timezone.localdate)
+    rubrica = models.CharField(max_length=60, default="alte_investitii")
+    suma_eur = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    suma_ron = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    activ = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["data", "id"]
+
+    def __str__(self):
+        return f"{self.user.username} | {self.rubrica} | EUR:{self.suma_eur} RON:{self.suma_ron}"
 
 
 from django.contrib.auth.models import User

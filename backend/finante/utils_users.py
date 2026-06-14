@@ -14,13 +14,17 @@ def get_connected_user_ids(user):
     )
 
     connected_user_ids = []
+    seen_user_ids = {user.id}
 
     for bridge in bridges:
         if bridge.from_user_id == user.id:
-            connected_user_ids.append(bridge.to_user_id)
+            connected_user_id = bridge.to_user_id
         else:
-            connected_user_ids.append(bridge.from_user_id)
+            connected_user_id = bridge.from_user_id
+
+        if connected_user_id not in seen_user_ids:
+            seen_user_ids.add(connected_user_id)
+            connected_user_ids.append(connected_user_id)
 
     return [user.id] + connected_user_ids
-
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import { getCachedApiData } from "../services/apiConfig";
 import styles from "../styles/iosStyles";
 
 function getLunaFinanciara(dateStr) {
@@ -18,10 +19,20 @@ function getLunaFinanciara(dateStr) {
 }
 
 export default function Economii() {
+  const cachedVenituri = getCachedApiData("venituri/");
+  const cachedFixe = getCachedApiData("cheltuieli-fixe/");
+  const cachedVariabile = getCachedApiData("cheltuieli-variabile/");
+
   const [activeTab, setActiveTab] = useState("economii");
-  const [venituri, setVenituri] = useState([]);
-  const [fixe, setFixe] = useState([]);
-  const [variabile, setVariabile] = useState([]);
+  const [venituri, setVenituri] = useState(() =>
+    Array.isArray(cachedVenituri) ? cachedVenituri : []
+  );
+  const [fixe, setFixe] = useState(() =>
+    Array.isArray(cachedFixe) ? cachedFixe : []
+  );
+  const [variabile, setVariabile] = useState(() =>
+    Array.isArray(cachedVariabile) ? cachedVariabile : []
+  );
   const [sumaVacanta, setSumaVacanta] = useState("");
   const [dataVacanta, setDataVacanta] = useState(
     new Date().toISOString().split("T")[0]
@@ -31,24 +42,27 @@ export default function Economii() {
     new Date().toISOString().split("T")[0]
   );
   const [editCheltuialaVacantaId, setEditCheltuialaVacantaId] = useState(null);
+  const [msg, setMsg] = useState("");
 
   const loadData = useCallback(async () => {
-    const [v, f, va] = await Promise.all([
-      api.get("venituri/"),
-      api.get("cheltuieli-fixe/"),
-      api.get("cheltuieli-variabile/"),
-    ]);
-    setVenituri(v.data);
-    setFixe(f.data);
-    setVariabile(va.data);
+    try {
+      const [v, f, va] = await Promise.all([
+        api.get("venituri/"),
+        api.get("cheltuieli-fixe/"),
+        api.get("cheltuieli-variabile/"),
+      ]);
+      setVenituri(v.data || []);
+      setFixe(f.data || []);
+      setVariabile(va.data || []);
+      setMsg("");
+    } catch (error) {
+      console.error("Eroare la incarcarea economiilor:", error);
+      setMsg("Nu am putut incarca datele pentru economii si vacanta.");
+    }
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-
-    return () => clearTimeout(timer);
+    void Promise.resolve().then(loadData);
   }, [loadData]);
 
   const istoric = useMemo(() => {
@@ -109,6 +123,9 @@ export default function Economii() {
   const totalVacanta = variabile
     .filter((v) => v.categorie === "vacanta")
     .reduce((s, v) => s + Number(v.suma), 0);
+  const totalEconomiiIntroduse = variabile
+    .filter((v) => v.categorie === "economii")
+    .reduce((s, v) => s + Number(v.suma), 0);
 
   const totalCheltuit = variabile
     .filter((v) => v.categorie === "vacanta_cheltuita")
@@ -127,7 +144,7 @@ export default function Economii() {
     });
 
     setSumaVacanta("");
-    loadData();
+    await loadData();
   };
 
   const adaugaCheltuialaVacanta = async () => {
@@ -152,7 +169,7 @@ export default function Economii() {
     setEditCheltuialaVacantaId(null);
     setSumaCheltuialaVacanta("");
     setDataCheltuialaVacanta(new Date().toISOString().split("T")[0]);
-    loadData();
+    await loadData();
   };
 
   const startEditCheltuialaVacanta = (cheltuiala) => {
@@ -172,16 +189,30 @@ export default function Economii() {
       setDataCheltuialaVacanta(new Date().toISOString().split("T")[0]);
     }
 
-    loadData();
+    await loadData();
   };
 
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>Economii si vacanta</h2>
 
-      <div style={styles.heroCard}>
-        <div style={styles.heroLabel}>Total economisit</div>
-        <div style={styles.heroValue}>{formatAmount(totalRecent)} EUR</div>
+      {msg && <div style={styles.message}>{msg}</div>}
+
+      <div style={localStyles.summaryGrid}>
+        <div style={styles.heroCard}>
+          <div style={styles.heroLabel}>Total economisit</div>
+          <div style={styles.heroValue}>{formatAmount(totalRecent)} EUR</div>
+        </div>
+        <div style={styles.heroCard}>
+          <div style={styles.heroLabel}>Economii introduse</div>
+          <div style={styles.heroValue}>
+            {formatAmount(totalEconomiiIntroduse)} EUR
+          </div>
+        </div>
+        <div style={styles.heroCard}>
+          <div style={styles.heroLabel}>Ramas pentru vacanta</div>
+          <div style={styles.heroValue}>{formatAmount(totalRamasVacanta)} EUR</div>
+        </div>
       </div>
 
       <div style={localStyles.tabWrap}>
@@ -330,6 +361,12 @@ export default function Economii() {
 }
 
 const localStyles = {
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+    gap: 12,
+    marginBottom: 16,
+  },
   tabWrap: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",

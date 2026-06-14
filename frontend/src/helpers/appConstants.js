@@ -6,7 +6,26 @@ const parseUrlList = (value = "") =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-const normalizeApiBaseUrl = (url) => new URL("api/", url).href;
+const getUrlFallbackOrigin = () => {
+  if (typeof window !== "undefined") {
+    return window.location.origin;
+  }
+
+  return "http://127.0.0.1:8000";
+};
+
+const normalizeApiBaseUrl = (url) => {
+  const parsedUrl = new URL(url, getUrlFallbackOrigin());
+  const pathname = parsedUrl.pathname.replace(/\/+$/, "");
+
+  parsedUrl.pathname = pathname.endsWith("/api")
+    ? `${pathname}/`
+    : `${pathname}/api/`;
+  parsedUrl.search = "";
+  parsedUrl.hash = "";
+
+  return parsedUrl.href;
+};
 
 const getSameOriginApiBaseUrl = () => {
   if (typeof window === "undefined") {
@@ -29,16 +48,28 @@ const getPortApiBaseUrl = (port) => {
 };
 
 const getDefaultApiBaseUrls = () => {
-  const urls = [getSameOriginApiBaseUrl()];
-
-  if (typeof window === "undefined" || window.location.port !== "8000") {
-    urls.push(getPortApiBaseUrl("8000"));
+  if (typeof window === "undefined") {
+    return [getPortApiBaseUrl("8000")];
   }
+
+  const sameOriginUrl = getSameOriginApiBaseUrl();
+  const backendPortUrl = getPortApiBaseUrl("8000");
+
+  // Cand frontend-ul ruleaza separat (Vite/preview/static pe 5173/8080),
+  // endpoint-urile API reale sunt in backend-ul Django de pe portul 8000.
+  // Pastram same-origin ca fallback pentru deployment-uri cu reverse proxy sau
+  // cand aplicatia este servita direct de Django.
+  const prefersSameOrigin = !window.location.port || window.location.port === "8000";
+  const urls = prefersSameOrigin
+    ? [sameOriginUrl, backendPortUrl]
+    : [backendPortUrl, sameOriginUrl];
 
   return Array.from(new Set(urls));
 };
 
-const ENV_API_BASE_URLS = parseUrlList(import.meta.env.VITE_API_BASE_URL);
+const ENV_API_BASE_URLS = parseUrlList(import.meta.env.VITE_API_BASE_URL).map(
+  normalizeApiBaseUrl
+);
 
 export const API_BASE_URLS = ENV_API_BASE_URLS.length
   ? ENV_API_BASE_URLS
@@ -48,6 +79,6 @@ export const API_BASE_URL = API_BASE_URLS[0];
 
 export const INSTALL_APP_URLS = parseUrlList(import.meta.env.VITE_INSTALL_URLS);
 
-export const API_ROOT_URL = new URL("..", API_BASE_URL).href;
+export const API_ROOT_URL = API_BASE_URL;
 export const TOKEN_URL = new URL("token/", API_ROOT_URL).href;
 export const PASSWORD_RESET_URL = new URL("password-reset/", API_ROOT_URL).href;

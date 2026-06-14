@@ -6,10 +6,13 @@ from .views import (
     RegisterView,
     me,
     # viewsets
+    CreditViewSet,
     VenitViewSet,
     CheltuialaFixaViewSet,
     CheltuialaFixaAutomataViewSet,
     CheltuialaVariabilaViewSet,
+    InvestitieAutomataViewSet,
+    InvestitieCategorieViewSet,
     SalaryScheduleViewSet,
     EconomieVacantaViewSet,
     # function views
@@ -19,6 +22,7 @@ from .views import (
     calculeaza_economii_luna,
     istoric_economii,
     economii_vacanta_sumar,
+    categorii_investitii,
     fonduri,
     miscare_fond,
     miscare_fond_detail,
@@ -48,7 +52,18 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r"venituri", VenitViewSet, basename="venituri")
+router.register(r"credite", CreditViewSet, basename="credite")
 router.register(r"salary-schedules", SalaryScheduleViewSet, basename="salary-schedules")
+router.register(
+    r"investitii-categorii",
+    InvestitieCategorieViewSet,
+    basename="investitii-categorii",
+)
+router.register(
+    r"investitii-automate",
+    InvestitieAutomataViewSet,
+    basename="investitii-automate",
+)
 router.register(
     r"realizari-targets", RealizariTargetViewSet, basename="realizari-targets"
 )
@@ -101,6 +116,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("economii/vacanta/", economii_vacanta_sumar, name="economii-vacanta-sumar"),
     path("fonduri/", fonduri, name="fonduri"),
+    path("fonduri/categorii/", categorii_investitii, name="fonduri-categorii"),
     path("fonduri/miscare/", miscare_fond, name="miscare-fond"),
     path("fonduri/miscare/<int:pk>/", miscare_fond_detail, name="miscare-fond-detail"),
     path("fonduri/grafic/", fonduri_grafic, name="fonduri-grafic"),

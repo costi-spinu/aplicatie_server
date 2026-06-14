@@ -27,6 +27,13 @@ def env_list(name, default=None):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -40,40 +47,50 @@ SECRET_KEY = os.environ.get(
 DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in {"1", "true", "yes", "on"}
 
 # Backend-ul poate fi apelat fie pe acelasi origin ca frontend-ul, fie pe portul
-# 8000 ca fallback. Valorile implicite acopera localhost, IP-ul LAN initial si
-# IP-ul Tailscale initial; in productie pot fi extinse cu DJANGO_ALLOWED_HOSTS.
-ALLOWED_HOSTS = env_list(
-    "DJANGO_ALLOWED_HOSTS",
-    [
-        "localhost",
-        "127.0.0.1",
-        "[::1]",
-        "192.168.2.102",
-        "100.75.19.22",
-        ".ts.net",
-    ],
+# 8000 ca fallback. In DEBUG acceptam hosturi dinamice de dev/LAN pentru ca IP-ul
+# masinii se poate schimba; in productie seteaza explicit DJANGO_ALLOWED_HOSTS.
+DEFAULT_ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "192.168.2.102",
+    "100.75.19.22",
+    ".ts.net",
+]
+
+ALLOW_ALL_HOSTS = env_bool(
+    "DJANGO_ALLOW_ALL_HOSTS",
+    DEBUG and os.environ.get("DJANGO_ALLOWED_HOSTS") is None,
 )
+
+ALLOWED_HOSTS = (
+    ["*"]
+    if ALLOW_ALL_HOSTS
+    else env_list("DJANGO_ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS)
+)
+
+DEFAULT_FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://192.168.2.102:5173",
+    "http://192.168.2.102:8080",
+    "http://100.75.19.22:5173",
+    "http://100.75.19.22:8080",
+    "https://localhost:5173",
+    "https://127.0.0.1:5173",
+    "https://localhost:8080",
+    "https://127.0.0.1:8080",
+    "https://192.168.2.102:5173",
+    "https://192.168.2.102:8080",
+    "https://100.75.19.22:5173",
+    "https://100.75.19.22:8080",
+]
 
 FRONTEND_ORIGINS = env_list(
     "DJANGO_FRONTEND_ORIGINS",
-    [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://192.168.2.102:5173",
-        "http://192.168.2.102:8080",
-        "http://100.75.19.22:5173",
-        "http://100.75.19.22:8080",
-        "https://localhost:5173",
-        "https://127.0.0.1:5173",
-        "https://localhost:8080",
-        "https://127.0.0.1:8080",
-        "https://192.168.2.102:5173",
-        "https://192.168.2.102:8080",
-        "https://100.75.19.22:5173",
-        "https://100.75.19.22:8080",
-    ],
+    env_list("DJANGO_CORS_ALLOWED_ORIGINS", DEFAULT_FRONTEND_ORIGINS),
 )
 
 
@@ -174,18 +191,33 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 FRONTEND_DIST_DIR = REPO_DIR / "frontend" / "dist"
 STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.exists() else []
 
+DEFAULT_CORS_ALLOW_ALL_ORIGINS = (
+    DEBUG
+    and os.environ.get("DJANGO_FRONTEND_ORIGINS") is None
+    and os.environ.get("DJANGO_CORS_ALLOWED_ORIGINS") is None
+)
+
+CORS_ALLOW_ALL_ORIGINS = env_bool(
+    "DJANGO_CORS_ALLOW_ALL_ORIGINS",
+    DEFAULT_CORS_ALLOW_ALL_ORIGINS,
+)
 CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
 CORS_ALLOWED_ORIGIN_REGEXES = env_list(
     "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
     [r"^https?://[A-Za-z0-9.-]+\.ts\.net(?::(5173|8080))?$"],
 )
 CSRF_TRUSTED_ORIGINS = FRONTEND_ORIGINS + env_list(
-    "DJANGO_CSRF_TRUSTED_ORIGIN_PATTERNS",
-    ["http://*.ts.net", "https://*.ts.net"],
+    "DJANGO_CSRF_TRUSTED_ORIGINS",
+    env_list(
+        "DJANGO_CSRF_TRUSTED_ORIGIN_PATTERNS",
+        ["http://*.ts.net", "https://*.ts.net"],
+    ),
 )
 
 REST_FRAMEWORK = {

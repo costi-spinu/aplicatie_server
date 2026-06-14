@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import { getCachedApiData } from "../services/apiConfig";
 import styles from "../styles/iosStyles";
 
 const categoryLabelMap = {
@@ -35,13 +36,61 @@ const fixedAutomationCadenceLabelMap = fixedAutomationCadenceOptions.reduce(
   },
   {}
 );
+const fixedAutomationMonthIntervals = {
+  lunar: 1,
+  de_doua_ori_luna: 1,
+  de_trei_ori_luna: 1,
+  la_2_luni: 2,
+  la_3_luni: 3,
+  la_6_luni: 6,
+  anual: 12,
+};
+const fixedAutomationDayOffsets = {
+  lunar: [0],
+  de_doua_ori_luna: [0, 15],
+  de_trei_ori_luna: [0, 10, 20],
+  la_2_luni: [0],
+  la_3_luni: [0],
+  la_6_luni: [0],
+  anual: [0],
+};
 
 const TARGET_STORAGE_KEY = "realizari_targets_v2";
 const TARGET_SNAPSHOT_STORAGE_KEY = "realizari_target_snapshots_by_month_v1";
 const LEGACY_TARGET_STORAGE_KEY = "realizari_targets_by_month_v1";
+const emptyBudgetSummary = {
+  venitBrut: 0,
+  deduceriCredite: 0,
+  deduceriAutomate: 0,
+  deduceriTotal: 0,
+  venitNet: 0,
+};
+
+const buildBudgetSummary = (data) => ({
+  venitBrut: Number(data?.venit_brut || 0),
+  deduceriCredite: Number(data?.deduceri_credite || 0),
+  deduceriAutomate: Number(data?.deduceri_automate || 0),
+  deduceriTotal: Number(data?.deduceri_total || 0),
+  venitNet: Number(data?.venit || 0),
+});
 
 const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
+const clampDay = (value) => Math.min(Math.max(Number(value || 1), 1), 31);
+const getDayFromDate = (value) => {
+  if (!value) return String(new Date().getDate()).padStart(2, "0");
+  return String(clampDay(String(value).split("-")[2])).padStart(2, "0");
+};
+const buildDateForCurrentMonthDay = (dayValue) => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const day = clampDay(dayValue);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(
+    Math.min(day, lastDay)
+  ).padStart(2, "0")}`;
+};
 
 const getCurrentCycleRange = () => {
   const today = new Date();
@@ -72,6 +121,85 @@ const getExpenseMonthKey = (item) => String(item.data || "").slice(0, 7);
 const isManualFixedExpense = (item) => item.sursa !== "automat";
 const getFixedAutomationCadenceLabel = (value) =>
   fixedAutomationCadenceLabelMap[value] || value || "-";
+const parseIsoDate = (value) => {
+  const [year, month, day] = String(value || "")
+    .split("-")
+    .map((part) => Number(part));
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+const formatIsoDate = (value) =>
+  `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(
+    value.getDate()
+  ).padStart(2, "0")}`;
+const getMonthRange = (monthKey) => {
+  const [year, month] = String(monthKey || getCurrentMonthKey())
+    .split("-")
+    .map((part) => Number(part));
+  const safeYear = year || new Date().getFullYear();
+  const safeMonthIndex = month ? month - 1 : new Date().getMonth();
+  return {
+    start: new Date(safeYear, safeMonthIndex, 1),
+    end: new Date(safeYear, safeMonthIndex + 1, 0),
+  };
+};
+const addMonths = (baseDate, monthCount) => {
+  const next = new Date(baseDate);
+  const targetMonth = baseDate.getMonth() + monthCount;
+  next.setMonth(targetMonth, 1);
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(baseDate.getDate(), lastDay));
+  return next;
+};
+const iterFixedAutomationDates = (schedule, start, end) => {
+  const scheduleDate = parseIsoDate(schedule?.data);
+  if (!scheduleDate || scheduleDate > end) return [];
+
+  const interval = fixedAutomationMonthIntervals[schedule.cursivitate] || 1;
+  const monthDelta =
+    (start.getFullYear() - scheduleDate.getFullYear()) * 12 +
+    start.getMonth() -
+    scheduleDate.getMonth();
+  let step = Math.max(0, Math.floor(monthDelta / interval) - 1);
+  const dates = [];
+  const seenDates = new Set();
+
+  while (true) {
+    const monthAnchor = addMonths(scheduleDate, step * interval);
+    if (monthAnchor > end) break;
+
+    if (monthAnchor >= scheduleDate) {
+      const lastDay = new Date(
+        monthAnchor.getFullYear(),
+        monthAnchor.getMonth() + 1,
+        0
+      ).getDate();
+      const offsets = fixedAutomationDayOffsets[schedule.cursivitate] || [0];
+
+      offsets.forEach((offset) => {
+        const occurrence = new Date(
+          monthAnchor.getFullYear(),
+          monthAnchor.getMonth(),
+          Math.min(scheduleDate.getDate() + offset, lastDay)
+        );
+        const key = formatIsoDate(occurrence);
+        if (
+          occurrence >= start &&
+          occurrence <= end &&
+          occurrence >= scheduleDate &&
+          !seenDates.has(key)
+        ) {
+          seenDates.add(key);
+          dates.push(key);
+        }
+      });
+    }
+
+    step += 1;
+  }
+
+  return dates.sort();
+};
 
 const formatExpenseTitle = (item) =>
   item.expenseType === "fixe"
@@ -167,24 +295,79 @@ const getTargetsForMonth = ({ savedTargets, snapshots }, monthKey) => {
   );
 };
 
-export default function Cheltuieli() {
+const getApiErrorMessage = (error, fallback) => {
+  if (error?.response?.status === 401) {
+    return "Sesiunea a expirat sau nu esti autentificat. Delogheaza-te si intra din nou in cont.";
+  }
+
+  const data = error?.response?.data;
+  if (typeof data === "string" && data.trim()) return data;
+  if (data?.detail) return data.detail;
+
+  if (data && typeof data === "object") {
+    const firstValue = Object.values(data)[0];
+    if (Array.isArray(firstValue) && firstValue[0]) return String(firstValue[0]);
+    if (firstValue) return String(firstValue);
+  }
+
+  return fallback;
+};
+
+const upsertById = (items, nextItem) => {
+  const exists = items.some((item) => item.id === nextItem.id);
+  if (!exists) return [nextItem, ...items];
+  return items.map((item) => (item.id === nextItem.id ? nextItem : item));
+};
+
+const notifyFinanceDataChanged = () => {
+  window.dispatchEvent(new Event("finance-data-updated"));
+};
+
+export default function Cheltuieli({ user }) {
+  const cachedFixe = getCachedApiData("cheltuieli-fixe/");
+  const cachedVariabile = getCachedApiData("cheltuieli-variabile/");
+  const cachedFixeAutomate = getCachedApiData("cheltuieli-fixe-automate/");
+  const cachedBudget = getCachedApiData("buget/lunar/");
+  const cachedBudgetSummary = cachedBudget
+    ? buildBudgetSummary(cachedBudget)
+    : emptyBudgetSummary;
+  const cachedVenituri = getCachedApiData("venituri/");
+  const cachedCredits = getCachedApiData("credite/");
+  const cachedTargets = getCachedApiData("realizari-targets/");
+  const cachedGlobalTargets = getCachedApiData("obiective-cheltuieli-global/");
+  const cachedRate = getCachedApiData("curs-bnr/");
+  const cachedRonToEurRate =
+    Number(cachedRate?.ron_eur || 0) || RON_TO_EUR_FALLBACK;
+  const cachedEurRonRate = Number(cachedRate?.eur_ron || 0) || null;
+
   const [mainTab, setMainTab] = useState("gestionare");
   const [tab, setTab] = useState("variabile");
   const [fixedSubTab, setFixedSubTab] = useState("manuale");
   const [categorie, setCategorie] = useState("alimente");
-  const [venitTotal, setVenitTotal] = useState(0);
-  const [venituri, setVenituri] = useState([]);
+  const [venitTotal, setVenitTotal] = useState(cachedBudgetSummary.venitNet);
+  const [venituri, setVenituri] = useState(() =>
+    Array.isArray(cachedVenituri) ? cachedVenituri : []
+  );
+  const [credits, setCredits] = useState(() =>
+    Array.isArray(cachedCredits) ? cachedCredits : []
+  );
   const [descriere, setDescriere] = useState("");
   const [suma, setSuma] = useState("");
   const [moneda, setMoneda] = useState("EUR");
   const [data, setData] = useState(new Date().toISOString().split("T")[0]);
-  const [fixe, setFixe] = useState([]);
-  const [fixeAutomate, setFixeAutomate] = useState([]);
-  const [variabile, setVariabile] = useState([]);
+  const [fixe, setFixe] = useState(() =>
+    Array.isArray(cachedFixe) ? cachedFixe : []
+  );
+  const [fixeAutomate, setFixeAutomate] = useState(() =>
+    Array.isArray(cachedFixeAutomate) ? cachedFixeAutomate : []
+  );
+  const [variabile, setVariabile] = useState(() =>
+    Array.isArray(cachedVariabile) ? cachedVariabile : []
+  );
   const [editId, setEditId] = useState(null);
   const [autoEditId, setAutoEditId] = useState(null);
   const [autoDenumire, setAutoDenumire] = useState("");
-  const [autoData, setAutoData] = useState(new Date().toISOString().split("T")[0]);
+  const [autoDay, setAutoDay] = useState(String(new Date().getDate()));
   const [autoCursivitate, setAutoCursivitate] = useState("lunar");
   const [autoSuma, setAutoSuma] = useState("");
   const [autoMoneda, setAutoMoneda] = useState("EUR");
@@ -192,13 +375,21 @@ export default function Cheltuieli() {
   const [lastDeleted, setLastDeleted] = useState(null);
   const [undoTab, setUndoTab] = useState(null);
   const [historyMonth, setHistoryMonth] = useState(getCurrentMonthKey());
+  const [statusMonth, setStatusMonth] = useState(getCurrentMonthKey());
   const [exportMonth, setExportMonth] = useState(getCurrentMonthKey());
-  const [targetsByMonth, setTargetsByMonth] = useState({});
-  const [globalTargets, setGlobalTargets] = useState(null);
-  const [ronToEurRate, setRonToEurRate] = useState(RON_TO_EUR_FALLBACK);
-  const [eurRonRate, setEurRonRate] = useState(null);
-  const [rateDate, setRateDate] = useState("");
-  const [rateSource, setRateSource] = useState("fallback");
+  const [targetsByMonth, setTargetsByMonth] = useState(() =>
+    normalizeApiTargetsByMonth(Array.isArray(cachedTargets) ? cachedTargets : [])
+  );
+  const [globalTargets, setGlobalTargets] = useState(() =>
+    normalizeApiTarget(cachedGlobalTargets)
+  );
+  const [budgetSummary, setBudgetSummary] = useState(cachedBudgetSummary);
+  const [ronToEurRate, setRonToEurRate] = useState(cachedRonToEurRate);
+  const [eurRonRate, setEurRonRate] = useState(cachedEurRonRate);
+  const [rateDate, setRateDate] = useState(cachedRate?.date || "");
+  const [rateSource, setRateSource] = useState(cachedRate?.source || "fallback");
+  const [msg, setMsg] = useState("");
+  const [msgType, setMsgType] = useState("info");
 
   const cycleRange = useMemo(() => getCurrentCycleRange(), []);
   const targetState = useMemo(() => loadTargetState(), []);
@@ -239,7 +430,7 @@ export default function Cheltuieli() {
     }
   }, []);
 
-  const convertFixedAmountToEur = useCallback(
+  const convertAmountToEur = useCallback(
     (amount, currency) => {
       if (currency === "RON") return round2(Number(amount || 0) * ronToEurRate);
       return round2(Number(amount || 0));
@@ -248,32 +439,66 @@ export default function Cheltuieli() {
   );
 
   const loadData = useCallback(async () => {
-    const [f, v, automate, buget, venituriRes, targetsRes, globalTargetsRes] =
-      await Promise.all([
+    setMsg("");
+
+    try {
+      const [f, v] = await Promise.all([
         api.get("cheltuieli-fixe/"),
         api.get("cheltuieli-variabile/"),
+      ]);
+
+      setFixe(f.data || []);
+      setVariabile(v.data || []);
+
+      const optionalResults = await Promise.allSettled([
         api.get("cheltuieli-fixe-automate/"),
         api.get("buget/lunar/"),
         api.get("venituri/"),
+        api.get("credite/"),
         api.get("realizari-targets/"),
         api.get("obiective-cheltuieli-global/"),
       ]);
 
-    setFixe(f.data || []);
-    setFixeAutomate(automate.data || []);
-    setVariabile(v.data || []);
-    setVenituri(venituriRes.data || []);
-    setVenitTotal(Number(buget.data?.venit || 0));
-    setTargetsByMonth(normalizeApiTargetsByMonth(targetsRes.data || []));
-    setGlobalTargets(normalizeApiTarget(globalTargetsRes.data));
+      const [automate, buget, venituriRes, creditsRes, targetsRes, globalTargetsRes] =
+        optionalResults;
+
+      if (automate.status === "fulfilled") setFixeAutomate(automate.value.data || []);
+      if (buget.status === "fulfilled") {
+        const data = buget.value.data || {};
+        setVenitTotal(Number(data.venit || 0));
+        setBudgetSummary(buildBudgetSummary(data));
+      }
+      if (venituriRes.status === "fulfilled") setVenituri(venituriRes.value.data || []);
+      if (creditsRes.status === "fulfilled") setCredits(creditsRes.value.data || []);
+      if (targetsRes.status === "fulfilled") {
+        setTargetsByMonth(normalizeApiTargetsByMonth(targetsRes.value.data || []));
+      }
+      if (globalTargetsRes.status === "fulfilled") {
+        setGlobalTargets(normalizeApiTarget(globalTargetsRes.value.data));
+      }
+
+      const optionalError = optionalResults.find(
+        (result) => result.status === "rejected"
+      );
+      if (optionalError) {
+        console.warn(
+          "Unele date auxiliare de cheltuieli nu au putut fi incarcate.",
+          optionalResults
+        );
+        setMsg(
+          "Cheltuielile s-au incarcat, dar unele totaluri auxiliare nu sunt disponibile momentan."
+        );
+        setMsgType("warning");
+      }
+    } catch (error) {
+      console.error("Nu am putut incarca cheltuielile:", error);
+      setMsg(getApiErrorMessage(error, "Nu am putut incarca cheltuielile din backend."));
+      setMsgType("error");
+    }
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-
-    return () => clearTimeout(timer);
+    loadData();
   }, [loadData]);
 
   useEffect(() => {
@@ -292,7 +517,7 @@ export default function Cheltuieli() {
   const resetAutoForm = () => {
     setAutoEditId(null);
     setAutoDenumire("");
-    setAutoData(new Date().toISOString().split("T")[0]);
+    setAutoDay(String(new Date().getDate()));
     setAutoCursivitate("lunar");
     setAutoSuma("");
     setAutoMoneda("EUR");
@@ -320,7 +545,7 @@ export default function Cheltuieli() {
     setFixedSubTab("automate");
     setAutoEditId(item.id);
     setAutoDenumire(item.denumire || "");
-    setAutoData(item.data || new Date().toISOString().split("T")[0]);
+    setAutoDay(getDayFromDate(item.data));
     setAutoCursivitate(item.cursivitate || "lunar");
     setAutoSuma(item.suma || "");
     setAutoMoneda(item.moneda || "EUR");
@@ -330,54 +555,101 @@ export default function Cheltuieli() {
   };
 
   const adauga = async () => {
-    if (!suma) return;
+    if (!suma) {
+      setMsg("Completeaza suma inainte de salvare.");
+      setMsgType("error");
+      return;
+    }
+
+    if (tab === "fixe" && !descriere.trim()) {
+      setMsg("Completeaza descrierea pentru cheltuiala fixa.");
+      setMsgType("error");
+      return;
+    }
 
     const payload =
       tab === "fixe"
         ? {
             descriere,
-            suma: convertFixedAmountToEur(suma, moneda),
+            suma: convertAmountToEur(suma, moneda),
             moneda: "EUR",
             data,
           }
-        : { categorie: toApiCategory(categorie), suma, moneda, data };
+        : {
+            categorie: toApiCategory(categorie),
+            suma: convertAmountToEur(suma, moneda),
+            moneda: "EUR",
+            data,
+          };
 
-    if (editId) {
-      await api.put(
-        `${tab === "fixe" ? "cheltuieli-fixe" : "cheltuieli-variabile"}/${editId}/`,
-        payload
-      );
-    } else {
-      await api.post(
-        tab === "fixe" ? "cheltuieli-fixe/" : "cheltuieli-variabile/",
-        payload
-      );
+    try {
+      const wasEditing = Boolean(editId);
+      const currentTab = tab;
+      let response;
+
+      if (editId) {
+        response = await api.put(
+          `${tab === "fixe" ? "cheltuieli-fixe" : "cheltuieli-variabile"}/${editId}/`,
+          payload
+        );
+      } else {
+        response = await api.post(
+          tab === "fixe" ? "cheltuieli-fixe/" : "cheltuieli-variabile/",
+          payload
+        );
+      }
+
+      const savedItem = response.data;
+      if (currentTab === "fixe") {
+        setFixe((current) => upsertById(current, savedItem));
+      } else {
+        setVariabile((current) => upsertById(current, savedItem));
+      }
+
+      resetForm();
+      notifyFinanceDataChanged();
+      void loadData();
+      setMsg(wasEditing ? "Cheltuiala a fost actualizata." : "Cheltuiala a fost salvata.");
+      setMsgType("success");
+    } catch (error) {
+      console.error("Nu am putut salva cheltuiala:", error);
+      setMsg(getApiErrorMessage(error, "Nu am putut salva cheltuiala in backend."));
+      setMsgType("error");
     }
-
-    resetForm();
-    loadData();
   };
 
   const salveazaAutomat = async () => {
-    if (!autoDenumire || !autoSuma || !autoData) return;
+    if (!autoDenumire || !autoSuma || !autoDay) {
+      setMsg("Completeaza denumirea, suma si ziua lunii pentru automatizare.");
+      setMsgType("error");
+      return;
+    }
 
     const payload = {
       denumire: autoDenumire,
-      data: autoData,
+      data: buildDateForCurrentMonthDay(autoDay),
       cursivitate: autoCursivitate,
-      suma: convertFixedAmountToEur(autoSuma, autoMoneda),
+      suma: convertAmountToEur(autoSuma, autoMoneda),
       moneda: "EUR",
       activ: autoActiv,
     };
 
-    if (autoEditId) {
-      await api.put(`cheltuieli-fixe-automate/${autoEditId}/`, payload);
-    } else {
-      await api.post("cheltuieli-fixe-automate/", payload);
-    }
+    try {
+      if (autoEditId) {
+        await api.put(`cheltuieli-fixe-automate/${autoEditId}/`, payload);
+      } else {
+        await api.post("cheltuieli-fixe-automate/", payload);
+      }
 
-    resetAutoForm();
-    loadData();
+      resetAutoForm();
+      await loadData();
+      setMsg("Automatizarea a fost salvata.");
+      setMsgType("success");
+    } catch (error) {
+      console.error("Nu am putut salva automatizarea:", error);
+      setMsg(getApiErrorMessage(error, "Nu am putut salva automatizarea in backend."));
+      setMsgType("error");
+    }
   };
 
   const stergeAutomat = async (item) => {
@@ -387,18 +659,37 @@ export default function Cheltuieli() {
     if (autoEditId === item.id) {
       resetAutoForm();
     }
-    loadData();
+    await loadData();
   };
 
   const sterge = async (item, forcedTab = tab) => {
     if (!window.confirm("Sigur stergi?")) return;
 
+    const previousFixe = fixe;
+    const previousVariabile = variabile;
     setLastDeleted(item);
     setUndoTab(forcedTab);
-    await api.delete(
-      `${forcedTab === "fixe" ? "cheltuieli-fixe" : "cheltuieli-variabile"}/${item.id}/`
-    );
-    loadData();
+    if (forcedTab === "fixe") {
+      setFixe((current) => current.filter((row) => row.id !== item.id));
+    } else {
+      setVariabile((current) => current.filter((row) => row.id !== item.id));
+    }
+
+    try {
+      await api.delete(
+        `${forcedTab === "fixe" ? "cheltuieli-fixe" : "cheltuieli-variabile"}/${item.id}/`
+      );
+      notifyFinanceDataChanged();
+      void loadData();
+    } catch (error) {
+      setFixe(previousFixe);
+      setVariabile(previousVariabile);
+      setLastDeleted(null);
+      setUndoTab(null);
+      setMsg(getApiErrorMessage(error, "Nu am putut sterge cheltuiala."));
+      setMsgType("error");
+      return;
+    }
 
     setTimeout(() => {
       setLastDeleted(null);
@@ -424,13 +715,19 @@ export default function Cheltuieli() {
             data: lastDeleted.data,
           };
 
-    await api.post(
+    const response = await api.post(
       undoTab === "fixe" ? "cheltuieli-fixe/" : "cheltuieli-variabile/",
       payload
     );
+    if (undoTab === "fixe") {
+      setFixe((current) => upsertById(current, response.data));
+    } else {
+      setVariabile((current) => upsertById(current, response.data));
+    }
     setLastDeleted(null);
     setUndoTab(null);
-    loadData();
+    notifyFinanceDataChanged();
+    void loadData();
   };
 
   const fixedRows = useMemo(
@@ -449,8 +746,8 @@ export default function Cheltuieli() {
     [variabile]
   );
   const allExpenseRows = useMemo(
-    () => [...fixedRows, ...variableRows].sort(sortDescByNewest),
-    [fixedRows, sortDescByNewest, variableRows]
+    () => [...manualFixedRows, ...variableRows].sort(sortDescByNewest),
+    [manualFixedRows, sortDescByNewest, variableRows]
   );
 
   const list = useMemo(
@@ -464,10 +761,18 @@ export default function Cheltuieli() {
 
   const totalFixe = useMemo(
     () =>
-      fixe
+      manualFixedRows
         .filter((item) => inCurrentCycle(item.data))
-        .reduce((acc, item) => acc + Number(item.suma || 0), 0),
-    [fixe, inCurrentCycle]
+        .reduce((acc, item) => acc + convertAmountToEur(item.suma, item.moneda), 0),
+    [convertAmountToEur, inCurrentCycle, manualFixedRows]
+  );
+
+  const totalAutomatizariSalvate = useMemo(
+    () =>
+      fixeAutomate
+        .filter((item) => item.activ !== false)
+        .reduce((acc, item) => acc + convertAmountToEur(item.suma, item.moneda), 0),
+    [convertAmountToEur, fixeAutomate]
   );
 
   const totalVariabile = useMemo(
@@ -476,8 +781,8 @@ export default function Cheltuieli() {
         .filter(
           (item) => inCurrentCycle(item.data) && item.categorie !== "vacanta_cheltuita"
         )
-        .reduce((acc, item) => acc + Number(item.suma || 0), 0),
-    [inCurrentCycle, variabile]
+        .reduce((acc, item) => acc + convertAmountToEur(item.suma, item.moneda), 0),
+    [convertAmountToEur, inCurrentCycle, variabile]
   );
 
   const totalCheltuit = totalFixe + totalVariabile;
@@ -487,11 +792,15 @@ export default function Cheltuieli() {
   const showManualExpenseEntry = tab !== "fixe" || fixedSubTab === "manuale";
   const manualFixedPreview =
     tab === "fixe" && moneda === "RON" && suma
-      ? convertFixedAmountToEur(suma, moneda)
+      ? convertAmountToEur(suma, moneda)
+      : null;
+  const manualVariablePreview =
+    tab === "variabile" && moneda === "RON" && suma
+      ? convertAmountToEur(suma, moneda)
       : null;
   const autoFixedPreview =
     autoMoneda === "RON" && autoSuma
-      ? convertFixedAmountToEur(autoSuma, autoMoneda)
+      ? convertAmountToEur(autoSuma, autoMoneda)
       : null;
   const rateLabel =
     rateSource === "BNR" && eurRonRate
@@ -501,11 +810,14 @@ export default function Cheltuieli() {
   const variableStatusRows = useMemo(() => {
     const variableStatus = variabile
       .filter(
-        (item) => inCurrentCycle(item.data) && item.categorie !== "vacanta_cheltuita"
+        (item) =>
+          getExpenseMonthKey(item) === statusMonth &&
+          item.categorie !== "vacanta_cheltuita"
       )
       .reduce((acc, item) => {
         const key = toUiCategory(item.categorie || "neprevazute");
-        acc[key] = (acc[key] || 0) + Number(item.suma || 0);
+        acc[key] =
+          (acc[key] || 0) + convertAmountToEur(item.suma, item.moneda);
         return acc;
       }, {});
 
@@ -516,7 +828,7 @@ export default function Cheltuieli() {
         label: categoryLabelMap[key] || key,
         sum,
       }));
-  }, [inCurrentCycle, variabile]);
+  }, [convertAmountToEur, statusMonth, variabile]);
 
   const totalVariabileCurente = variableStatusRows.reduce(
     (acc, row) => acc + row.sum,
@@ -539,24 +851,63 @@ export default function Cheltuieli() {
     [allExpenseRows, exportMonth, sortDescByNewest]
   );
 
-  const exportVenitTotal = venituri
+  const exportRange = useMemo(() => getMonthRange(exportMonth), [exportMonth]);
+  const exportCreditRows = useMemo(
+    () =>
+      credits
+        .filter((item) => getExpenseMonthKey(item) === exportMonth)
+        .slice()
+        .sort(sortDescByNewest),
+    [credits, exportMonth, sortDescByNewest]
+  );
+  const exportAutoDeductionRows = useMemo(
+    () =>
+      fixeAutomate
+        .filter((item) => item.activ !== false)
+        .flatMap((item) =>
+          iterFixedAutomationDates(item, exportRange.start, exportRange.end).map(
+            (occurrenceDate) => ({
+              ...item,
+              occurrenceDate,
+            })
+          )
+        )
+        .sort((a, b) => {
+          const dateDiff = new Date(b.occurrenceDate) - new Date(a.occurrenceDate);
+          if (dateDiff !== 0) return dateDiff;
+          return Number(b.id || 0) - Number(a.id || 0);
+        }),
+    [exportRange.end, exportRange.start, fixeAutomate]
+  );
+  const exportVenitBrut = venituri
     .filter((item) => getExpenseMonthKey(item) === exportMonth)
     .reduce((acc, item) => acc + Number(item.suma || 0), 0);
+  const exportCreditTotal = exportCreditRows.reduce(
+    (acc, item) => acc + convertAmountToEur(item.suma, item.moneda),
+    0
+  );
+  const exportAutoDeductionTotal = exportAutoDeductionRows.reduce(
+    (acc, item) => acc + convertAmountToEur(item.suma, item.moneda),
+    0
+  );
+  const exportDeduceriTotal = exportCreditTotal + exportAutoDeductionTotal;
+  const exportVenitNet = exportVenitBrut - exportDeduceriTotal;
   const exportFixedTotal = exportRows
     .filter((item) => item.expenseType === "fixe")
-    .reduce((acc, item) => acc + Number(item.suma || 0), 0);
+    .reduce((acc, item) => acc + convertAmountToEur(item.suma, item.moneda), 0);
   const exportCategoryTotals = exportRows
     .filter((item) => item.expenseType === "variabile")
     .reduce((acc, item) => {
       const key = toUiCategory(item.categorie || "neprevazute");
-      acc[key] = (acc[key] || 0) + Number(item.suma || 0);
+      acc[key] =
+        (acc[key] || 0) + convertAmountToEur(item.suma, item.moneda);
       return acc;
     }, {});
   const exportTotalCheltuit = exportRows.reduce(
-    (acc, item) => acc + Number(item.suma || 0),
+    (acc, item) => acc + convertAmountToEur(item.suma, item.moneda),
     0
   );
-  const exportRamas = exportVenitTotal - exportTotalCheltuit;
+  const exportRamas = exportVenitNet - exportTotalCheltuit;
   const exportTargets =
     targetsByMonth[exportMonth] ||
     (exportMonth >= getCurrentMonthKey() ? globalTargets : null) ||
@@ -612,7 +963,11 @@ export default function Cheltuieli() {
     const summaryRows = [
       ["Indicator", "Valoare"],
       ["Luna", exportMonth],
-      ["Venit total", `${exportVenitTotal.toFixed(2)} EUR`],
+      ["Venit brut", `${exportVenitBrut.toFixed(2)} EUR`],
+      ["Credite scazute", `-${exportCreditTotal.toFixed(2)} EUR`],
+      ["Automatizari scazute", `-${exportAutoDeductionTotal.toFixed(2)} EUR`],
+      ["Deduceri totale", `-${exportDeduceriTotal.toFixed(2)} EUR`],
+      ["Venit net", `${exportVenitNet.toFixed(2)} EUR`],
       ["Total cheltuit", `${exportTotalCheltuit.toFixed(2)} EUR`],
       ["Suma economisita sau ramasa", `${exportRamas.toFixed(2)} EUR`],
     ];
@@ -630,8 +985,8 @@ export default function Cheltuieli() {
         const targetPercent =
           row.target > 0 ? Math.round((row.actual / row.target) * 100) : 0;
         const incomePercent =
-          exportVenitTotal > 0
-            ? Math.round((row.actual / exportVenitTotal) * 100)
+          exportVenitNet > 0
+            ? Math.round((row.actual / exportVenitNet) * 100)
             : 0;
         return [
           row.label,
@@ -653,8 +1008,36 @@ export default function Cheltuieli() {
         row.username || "-",
       ]),
     ];
+    const creditRows = [
+      ["Data", "Denumire", "Suma", "Moneda", "User"],
+      ...exportCreditRows.map((row) => [
+        row.data,
+        row.denumire || "Credit",
+        row.suma,
+        row.moneda,
+        row.username || "-",
+      ]),
+    ];
+    const autoDeductionRows = [
+      ["Data", "Denumire", "Cursivitate", "Suma", "Moneda", "User"],
+      ...exportAutoDeductionRows.map((row) => [
+        row.occurrenceDate,
+        row.denumire || "Automatizare",
+        getFixedAutomationCadenceLabel(row.cursivitate),
+        row.suma,
+        row.moneda,
+        row.username || "-",
+      ]),
+    ];
 
-    return { summaryRows, categoryRows, objectiveRows, detailRows };
+    return {
+      summaryRows,
+      categoryRows,
+      objectiveRows,
+      creditRows,
+      autoDeductionRows,
+      detailRows,
+    };
   };
 
   const buildExportHtml = () => {
@@ -675,6 +1058,8 @@ export default function Cheltuieli() {
       ${makeExportTable(tables.summaryRows, "Sumar")}
       ${makeExportTable(tables.categoryRows, "Totaluri pe categorie")}
       ${makeExportTable(tables.objectiveRows, "Obiective cheltuieli")}
+      ${makeExportTable(tables.creditRows, "Credite scazute din venit")}
+      ${makeExportTable(tables.autoDeductionRows, "Automatizari scazute din venit")}
       ${makeExportTable(tables.detailRows, "Detalii cheltuieli")}
     </body></html>`;
   };
@@ -699,7 +1084,25 @@ export default function Cheltuieli() {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>Gestionare cheltuieli</h2>
+      <div style={localStyles.titleRow}>
+        <h2 style={styles.title}>Gestionare cheltuieli</h2>
+        {user?.username && (
+          <span style={localStyles.accountBadge}>Cont: {user.username}</span>
+        )}
+      </div>
+
+      {msg && (
+        <div
+          style={{
+            ...localStyles.alert,
+            ...(msgType === "error" ? localStyles.alertError : {}),
+            ...(msgType === "success" ? localStyles.alertSuccess : {}),
+            ...(msgType === "warning" ? localStyles.alertWarning : {}),
+          }}
+        >
+          {msg}
+        </div>
+      )}
 
       <div style={localStyles.mainTabsWrapper}>
         {[
@@ -724,7 +1127,7 @@ export default function Cheltuieli() {
       {mainTab === "gestionare" && (
         <>
           <div style={styles.heroCard}>
-            <div style={styles.heroLabel}>Sold disponibil</div>
+            <div style={styles.heroLabel}>Venit disponibil</div>
             <div
               style={{
                 ...styles.heroValue,
@@ -732,6 +1135,24 @@ export default function Cheltuieli() {
               }}
             >
               {Number(baniRamasi || 0).toFixed(2)} EUR
+            </div>
+            <div style={localStyles.deductionGrid}>
+              <div>
+                <span>Venit brut</span>
+                <strong>{budgetSummary.venitBrut.toFixed(2)} EUR</strong>
+              </div>
+              <div>
+                <span>Credite</span>
+                <strong>-{budgetSummary.deduceriCredite.toFixed(2)} EUR</strong>
+              </div>
+              <div>
+                <span>Automate pe 27</span>
+                <strong>-{budgetSummary.deduceriAutomate.toFixed(2)} EUR</strong>
+              </div>
+              <div>
+                <span>Venit net</span>
+                <strong>{budgetSummary.venitNet.toFixed(2)} EUR</strong>
+              </div>
             </div>
           </div>
 
@@ -775,6 +1196,10 @@ export default function Cheltuieli() {
             <div style={localStyles.breakdownRow}>
               <span>Fixe</span>
               <strong>{totalFixe.toFixed(2)} EUR</strong>
+            </div>
+            <div style={localStyles.breakdownRow}>
+              <span>Automatizari scazute din venit</span>
+              <strong>{budgetSummary.deduceriAutomate.toFixed(2)} EUR</strong>
             </div>
             <div style={localStyles.breakdownRow}>
               <span>Variabile</span>
@@ -857,6 +1282,12 @@ export default function Cheltuieli() {
                   {rateLabel}
                 </div>
               )}
+              {manualVariablePreview !== null && (
+                <div style={localStyles.previewText}>
+                  Conversie automata: {manualVariablePreview.toFixed(2)} EUR.{" "}
+                  {rateLabel}
+                </div>
+              )}
               <input
                 style={styles.input}
                 type="date"
@@ -889,9 +1320,12 @@ export default function Cheltuieli() {
               />
               <input
                 style={styles.input}
-                type="date"
-                value={autoData}
-                onChange={(e) => setAutoData(e.target.value)}
+                type="number"
+                min="1"
+                max="31"
+                placeholder="Ziua lunii"
+                value={autoDay}
+                onChange={(e) => setAutoDay(e.target.value)}
               />
               <select
                 style={styles.input}
@@ -945,11 +1379,15 @@ export default function Cheltuieli() {
               </div>
 
               <div style={localStyles.autoTableWrap}>
+                <div style={localStyles.autoTotalRow}>
+                  <span>Total automatizari active</span>
+                  <strong>{totalAutomatizariSalvate.toFixed(2)} EUR</strong>
+                </div>
                 <table style={localStyles.autoTable}>
                   <thead>
                     <tr>
                       <th style={localStyles.tableHeaderCell}>Denumire</th>
-                      <th style={localStyles.tableHeaderCell}>Data</th>
+                      <th style={localStyles.tableHeaderCell}>Ziua lunii</th>
                       <th style={localStyles.tableHeaderCell}>Cursivitate</th>
                       <th style={localStyles.tableHeaderCell}>Suma</th>
                       <th style={localStyles.tableHeaderCell}>Status</th>
@@ -968,7 +1406,7 @@ export default function Cheltuieli() {
                       <tr key={item.id}>
                         <td style={localStyles.tableCell}>{item.denumire}</td>
                         <td style={localStyles.tableCell}>
-                          {new Date(item.data).toLocaleDateString("ro-RO")}
+                          {getDayFromDate(item.data)}
                         </td>
                         <td style={localStyles.tableCell}>
                           {getFixedAutomationCadenceLabel(item.cursivitate)}
@@ -1031,10 +1469,13 @@ export default function Cheltuieli() {
       {mainTab === "status-variabile" && (
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>Status cheltuieli variabile</h3>
-          <div style={styles.date}>
-            Interval curent: {cycleRange.start.toLocaleDateString("ro-RO")} -{" "}
-            {cycleRange.end.toLocaleDateString("ro-RO")}
-          </div>
+          <input
+            type="month"
+            style={styles.input}
+            value={statusMonth}
+            onChange={(e) => setStatusMonth(e.target.value)}
+          />
+          <div style={styles.date}>Luna selectata: {statusMonth}</div>
           <div style={{ marginTop: 16 }}>
             {variableStatusRows.length === 0 && (
               <div style={styles.message}>
@@ -1141,6 +1582,55 @@ function ExpenseRow({ item, onEdit, onDelete, showType = false }) {
 }
 
 const localStyles = {
+  titleRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 16,
+  },
+  accountBadge: {
+    background: "#f8faf9",
+    border: "1px solid #cfd8d3",
+    borderRadius: 4,
+    color: "#5f6f66",
+    fontSize: 13,
+    fontWeight: 800,
+    padding: "6px 9px",
+  },
+  alert: {
+    border: "1px solid #cfd8d3",
+    background: "#f8faf9",
+    borderRadius: 4,
+    color: "#10201a",
+    fontSize: 14,
+    fontWeight: 700,
+    marginBottom: 16,
+    padding: "11px 12px",
+  },
+  alertError: {
+    background: "#fdebea",
+    borderColor: "#f2b8b5",
+    color: "#b42318",
+  },
+  alertSuccess: {
+    background: "#e6f4ed",
+    borderColor: "#b7dfc4",
+    color: "#146c43",
+  },
+  alertWarning: {
+    background: "#fff8e5",
+    borderColor: "#ead08a",
+    color: "#735c0f",
+  },
+  deductionGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gap: 8,
+    marginTop: 12,
+    fontSize: 13,
+  },
   mainTabsWrapper: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
@@ -1315,6 +1805,15 @@ const localStyles = {
     overflowX: "auto",
     border: "1px solid #cfd8d3",
     borderRadius: 4,
+  },
+  autoTotalRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 12px",
+    borderBottom: "1px solid #cfd8d3",
+    background: "#f8faf9",
   },
   autoTable: {
     width: "100%",

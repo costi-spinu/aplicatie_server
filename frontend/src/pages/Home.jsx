@@ -1,4 +1,5 @@
 import styles from "../styles/iosStyles";
+import InstallAppButton from "../components/InstallAppButton";
 
 export default function Home({ onLoginClick }) {
   return (
@@ -14,6 +15,9 @@ export default function Home({ onLoginClick }) {
         <button onClick={onLoginClick} style={styles.primaryButton}>
           Autentificare
         </button>
+        <div style={styles.installAction}>
+          <InstallAppButton />
+        </div>
       </div>
     </div>
   );

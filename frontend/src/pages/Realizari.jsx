@@ -1,31 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-import { getCachedApiData } from "../services/apiConfig";
+import {
+  areCachedApiEndpointsFresh,
+  getCachedApiData,
+} from "../services/apiConfig";
+import { REALIZARI_ENDPOINTS } from "../services/preloadEndpoints";
 import styles from "../styles/iosStyles";
+import {
+  categoryKeys,
+  categoryLabelMap,
+  formatBudgetCycleLabel,
+  getBudgetCycleKey,
+  toUiCategory,
+} from "../utils/cheltuieliUtils";
 
 const STORAGE_KEY = "realizari_targets_by_month_v1";
-
-const categoryLabelMap = {
-  alimente: "Alimente",
-  sanatate: "Sanatate",
-  transport: "Transport",
-  cultura: "Cultura",
-  shopping: "Shopping",
-  neprevazute: "Neprevazute",
-  animalute: "Animalute",
-  vacanta: "Vacanta",
-  divertisment: "Iesiri / Restaurante / Diverse",
-  investitii: "Investitii",
-};
-
-const categoryKeys = Object.keys(categoryLabelMap);
-
-const getMonthKey = (value) => {
-  const date = value ? new Date(value) : new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-};
-
-const toUiCategory = (cat) => (cat === "auto" ? "transport" : cat);
 const buildEmptyCategoryTargets = () =>
   categoryKeys.reduce((acc, key) => ({ ...acc, [key]: "" }), {});
 const normalizeCategoryTargets = (values = {}) =>
@@ -62,7 +51,10 @@ const hasTargetValues = (target) =>
   );
 
 export default function Realizari() {
-  const initialCurrentMonthKey = getMonthKey();
+  const cachedPeriod = getCachedApiData("perioada-bugetara/") || null;
+  const initialBudgetStartDay = Number(cachedPeriod?.start_day || 26);
+  const initialCurrentCycleKey =
+    cachedPeriod?.cycle_key || getBudgetCycleKey(new Date(), initialBudgetStartDay);
   const cachedTargetsByMonth = normalizeApiTargets(
     getCachedApiData("realizari-targets/") || []
   );
@@ -71,7 +63,7 @@ export default function Realizari() {
   );
   const cachedFormTarget = hasTargetValues(cachedGlobalTarget)
     ? cachedGlobalTarget
-    : cachedTargetsByMonth[initialCurrentMonthKey] || cachedGlobalTarget;
+    : cachedTargetsByMonth[initialCurrentCycleKey] || cachedGlobalTarget;
   const cachedFixe = getCachedApiData("cheltuieli-fixe/");
   const cachedVariabile = getCachedApiData("cheltuieli-variabile/");
 
@@ -103,8 +95,9 @@ export default function Realizari() {
     Array.isArray(cachedVariabile) ? cachedVariabile : []
   );
   const [msg, setMsg] = useState("");
+  const [budgetStartDay, setBudgetStartDay] = useState(initialBudgetStartDay);
 
-  const currentMonthKey = getMonthKey();
+  const currentCycleKey = getBudgetCycleKey(new Date(), budgetStartDay);
 
   const applyTargetToInputs = useCallback((target) => {
     if (!target) {
@@ -158,9 +151,10 @@ export default function Realizari() {
   }, []);
 
   const loadTargets = useCallback(async () => {
-    const [targetsRes, globalRes] = await Promise.all([
+    const [targetsRes, globalRes, periodRes] = await Promise.all([
       api.get("realizari-targets/"),
       api.get("obiective-cheltuieli-global/"),
+      api.get("perioada-bugetara/"),
     ]);
     const remoteTargets = await migrateLocalTargets(
       normalizeApiTargets(targetsRes.data || [])
@@ -168,12 +162,13 @@ export default function Realizari() {
     const normalizedGlobal = normalizeApiTarget(globalRes.data);
     const formTarget = hasTargetValues(normalizedGlobal)
       ? normalizedGlobal
-      : remoteTargets[currentMonthKey] || normalizedGlobal;
+      : remoteTargets[currentCycleKey] || normalizedGlobal;
 
     setTargetsByMonth(remoteTargets);
     setGlobalTarget(normalizedGlobal);
+    setBudgetStartDay(Number(periodRes.data?.start_day || 26));
     applyTargetToInputs(formTarget);
-  }, [applyTargetToInputs, currentMonthKey, migrateLocalTargets]);
+  }, [applyTargetToInputs, currentCycleKey, migrateLocalTargets]);
 
   const loadExpenses = useCallback(async () => {
     const [f, v] = await Promise.all([
@@ -185,6 +180,13 @@ export default function Realizari() {
   }, []);
 
   useEffect(() => {
+    if (
+      !localStorage.getItem(STORAGE_KEY) &&
+      areCachedApiEndpointsFresh(REALIZARI_ENDPOINTS)
+    ) {
+      return;
+    }
+
     void Promise.resolve().then(() =>
       Promise.all([loadTargets(), loadExpenses()]).catch(() =>
         setMsg("Eroare la incarcarea datelor")
@@ -192,21 +194,21 @@ export default function Realizari() {
     );
   }, [loadExpenses, loadTargets]);
 
-  const actualByMonth = useMemo(() => {
+  const actualByCycle = useMemo(() => {
     const fixed = {};
     const variableByCategory = {};
 
     fixe
       .filter((item) => item.sursa !== "automat")
       .forEach((item) => {
-        const key = getMonthKey(item.data);
+        const key = getBudgetCycleKey(item.data, budgetStartDay);
         fixed[key] = (fixed[key] || 0) + Number(item.suma || 0);
       });
 
     variabile
       .filter((item) => item.categorie !== "vacanta_cheltuita")
       .forEach((item) => {
-        const key = getMonthKey(item.data);
+        const key = getBudgetCycleKey(item.data, budgetStartDay);
         const category = toUiCategory(item.categorie || "neprevazute");
         variableByCategory[key] = variableByCategory[key] || {};
         variableByCategory[key][category] =
@@ -214,7 +216,7 @@ export default function Realizari() {
       });
 
     return { fixed, variableByCategory };
-  }, [fixe, variabile]);
+  }, [budgetStartDay, fixe, variabile]);
 
   const getEffectiveTarget = useCallback(
     (key) =>
@@ -223,16 +225,16 @@ export default function Realizari() {
     [globalTarget, targetsByMonth]
   );
 
-  const buildMonthSummary = useCallback(
+  const buildCycleSummary = useCallback(
     (key) => {
       const target = getEffectiveTarget(key);
       if (!target) return null;
 
       const variableTargets = normalizeCategoryTargets(target.categoryTargets);
       const variableActuals = normalizeCategoryTargets(
-        actualByMonth.variableByCategory[key]
+        actualByCycle.variableByCategory[key]
       );
-      const fixedActual = Number(actualByMonth.fixed[key] || 0);
+      const fixedActual = Number(actualByCycle.fixed[key] || 0);
       const fixedTarget = Number(target.fixedTarget || 0);
       const totalVariableTarget = sumValues(variableTargets);
       const totalVariableActual = sumValues(variableActuals);
@@ -250,26 +252,26 @@ export default function Realizari() {
         totalProgress: computeProgress(totalActual, totalTarget),
       };
     },
-    [actualByMonth, getEffectiveTarget]
+    [actualByCycle, getEffectiveTarget]
   );
 
-  const currentSummary = buildMonthSummary(currentMonthKey);
+  const currentSummary = buildCycleSummary(currentCycleKey);
   const historyMonthKeys = useMemo(
     () =>
       Array.from(
         new Set([
           ...Object.keys(targetsByMonth),
-          ...Object.keys(actualByMonth.fixed),
-          ...Object.keys(actualByMonth.variableByCategory),
-          currentMonthKey,
+          ...Object.keys(actualByCycle.fixed),
+          ...Object.keys(actualByCycle.variableByCategory),
+          currentCycleKey,
         ])
       ).sort((a, b) => b.localeCompare(a)),
-    [actualByMonth, currentMonthKey, targetsByMonth]
+    [actualByCycle, currentCycleKey, targetsByMonth]
   );
   const normalizedSelectedHistoryMonth =
-    selectedHistoryMonth || historyMonthKeys[0] || currentMonthKey;
+    selectedHistoryMonth || historyMonthKeys[0] || currentCycleKey;
   const selectedHistorySummary = normalizedSelectedHistoryMonth
-    ? buildMonthSummary(normalizedSelectedHistoryMonth)
+    ? buildCycleSummary(normalizedSelectedHistoryMonth)
     : null;
 
   const saveGlobalTarget = async () => {
@@ -284,7 +286,7 @@ export default function Realizari() {
         category_targets: categoryTargets,
       });
       await loadTargets();
-      setMsg("Obiectivele lunare au fost salvate.");
+      setMsg("Obiectivele pe ciclu au fost salvate.");
     } catch {
       setMsg("Eroare la salvarea obiectivelor");
     }
@@ -310,7 +312,9 @@ export default function Realizari() {
 
     return (
       <div key={summary.key} style={styles.card}>
-        <h3 style={styles.sectionTitle}>{summary.key}</h3>
+        <h3 style={styles.sectionTitle}>
+          {formatBudgetCycleLabel(summary.key, budgetStartDay)}
+        </h3>
         <div style={localStyles.rowBetween}>
           <span>Tinta totala</span>
           <strong>{summary.totalTarget.toFixed(2)} EUR</strong>
@@ -370,7 +374,7 @@ export default function Realizari() {
 
   const renderTargetForm = () => (
     <div style={styles.card}>
-      <h3 style={styles.sectionTitle}>Obiective lunare</h3>
+      <h3 style={styles.sectionTitle}>Obiective pe ciclu</h3>
       <input
         style={styles.input}
         type="number"
@@ -410,9 +414,9 @@ export default function Realizari() {
 
       <div style={localStyles.tabWrap}>
         {[
-          ["curent", "Luna curenta"],
+          ["curent", "Ciclul curent"],
           ["istoric", "Istoric"],
-          ["obiective", "Obiective lunare"],
+          ["obiective", "Obiective pe ciclu"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -431,7 +435,7 @@ export default function Realizari() {
         <>
           {!currentSummary && (
             <div style={styles.message}>
-              Nu exista inca obiective salvate pentru luna curenta.
+              Nu exista inca obiective salvate pentru ciclul curent.
             </div>
           )}
           {currentSummary && renderSummaryCard(currentSummary)}
@@ -441,7 +445,7 @@ export default function Realizari() {
       {activeTab === "istoric" && (
         <>
           <div style={styles.card}>
-            <h3 style={styles.sectionTitle}>Selecteaza luna</h3>
+            <h3 style={styles.sectionTitle}>Selecteaza ciclul</h3>
             <input
               type="month"
               style={styles.input}

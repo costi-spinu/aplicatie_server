@@ -1,0 +1,13 @@
+[Unit]
+Description=Arhivare sigură date financiare Buget & Economii
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=c0stelus
+Group=c0stelus
+WorkingDirectory=/home/c0stelus/aplicatie_server
+EnvironmentFile=-/etc/default/aplicatie
+ExecStart=/home/c0stelus/aplicatie_server/venv/bin/python /home/c0stelus/aplicatie_server/backend/manage.py archive_financial_records
+UMask=0077
+

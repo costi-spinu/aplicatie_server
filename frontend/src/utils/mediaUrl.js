@@ -1,10 +1,8 @@
-import { API_ROOT_URL } from "../helpers/appConstants";
-
-const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+import { getActiveApiBaseUrl } from "../services/apiConfig";
 
 const getApiOrigin = () => {
   try {
-    return new URL(API_ROOT_URL).origin;
+    return new URL(getActiveApiBaseUrl()).origin;
   } catch {
     return "";
   }
@@ -21,16 +19,8 @@ export const resolveMediaUrl = (value) => {
 
     const apiOrigin = getApiOrigin();
     const apiUrl = apiOrigin ? new URL(apiOrigin) : null;
-    const currentHostname = window.location.hostname;
-    const shouldUseCurrentHost =
-      LOCAL_HOSTNAMES.has(parsedUrl.hostname) &&
-      currentHostname &&
-      !LOCAL_HOSTNAMES.has(currentHostname);
 
-    if (shouldUseCurrentHost) {
-      parsedUrl.protocol = window.location.protocol || parsedUrl.protocol;
-      parsedUrl.hostname = currentHostname;
-    } else if (apiUrl) {
+    if (apiUrl) {
       parsedUrl.protocol = apiUrl.protocol;
       parsedUrl.hostname = apiUrl.hostname;
       parsedUrl.port = apiUrl.port;

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "./services/api";
-import { clearApiDataCache, preloadApiData } from "./services/apiConfig";
+import {
+  clearApiDataCache,
+  clearStoredAuthTokens,
+  preloadApiData,
+} from "./services/apiConfig";
+import { PAGE_PRELOAD_ENDPOINTS } from "./services/preloadEndpoints";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -16,57 +21,6 @@ import Realizari from "./pages/Realizari";
 import AppControls from "./components/AppControls";
 import InstallAppButton from "./components/InstallAppButton";
 
-const clearAuthStorage = () => {
-  localStorage.removeItem("access");
-  localStorage.removeItem("refresh");
-};
-
-const PAGE_PRELOAD_ENDPOINTS = {
-  venit: [
-    "curs-bnr/",
-    "venituri/",
-    "me/",
-    "salary-schedules/",
-    "credite/",
-    "buget/lunar/",
-  ],
-  cheltuieli: [
-    "curs-bnr/",
-    "cheltuieli-fixe/",
-    "cheltuieli-variabile/",
-    "cheltuieli-fixe-automate/",
-    "buget/lunar/",
-    "venituri/",
-    "credite/",
-    "realizari-targets/",
-    "obiective-cheltuieli-global/",
-  ],
-  economii: ["venituri/", "cheltuieli-fixe/", "cheltuieli-variabile/"],
-  fonduri: ["fonduri/", "fonduri/categorii/", "investitii-automate/"],
-  realizari: [
-    "realizari-targets/",
-    "obiective-cheltuieli-global/",
-    "cheltuieli-fixe/",
-    "cheltuieli-variabile/",
-  ],
-  profil: [
-    "profile/",
-    "users/list/",
-    "bridge/requests/",
-    "bridge/connections/",
-    "buget/lunar/",
-    "venituri/",
-    "cheltuieli-fixe/",
-    "cheltuieli-variabile/",
-    "fonduri/",
-    "curs-bnr/",
-  ],
-};
-
-const STARTUP_PRELOAD_ENDPOINTS = Array.from(
-  new Set(Object.values(PAGE_PRELOAD_ENDPOINTS).flat())
-);
-
 function App() {
   const [activePage, setActivePage] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -79,21 +33,30 @@ function App() {
   const [authView, setAuthView] = useState("home");
   const openPageRequestId = useRef(0);
 
+  const resetAuthState = useCallback(() => {
+    openPageRequestId.current += 1;
+    clearApiDataCache();
+    setLoggedIn(false);
+    setUser(null);
+    setAuthView("home");
+    setActivePage(null);
+    setShowSidebar(true);
+    setPageLoading(false);
+    setLoading(false);
+  }, []);
+
   const loadCurrentUser = useCallback(async () => {
     try {
       const res = await api.get("me/");
       setUser(res.data);
       setLoggedIn(true);
-      void preloadApiData(STARTUP_PRELOAD_ENDPOINTS);
     } catch {
-      clearAuthStorage();
-      clearApiDataCache();
-      setLoggedIn(false);
-      setUser(null);
+      clearStoredAuthTokens();
+      resetAuthState();
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [resetAuthState]);
 
   useEffect(() => {
     if (!loggedIn) {
@@ -105,9 +68,28 @@ function App() {
   }, [loadCurrentUser, loggedIn]);
 
   useEffect(() => {
-    window.addEventListener("profile-updated", loadCurrentUser);
-    return () => window.removeEventListener("profile-updated", loadCurrentUser);
+    const handleProfileUpdated = (event) => {
+      if (event.detail) {
+        setUser((current) => ({
+          ...current,
+          ...event.detail,
+          is_admin: current?.is_admin ?? event.detail?.is_admin,
+          is_superuser: current?.is_superuser ?? event.detail?.is_superuser,
+        }));
+      }
+
+      void loadCurrentUser();
+    };
+
+    window.addEventListener("profile-updated", handleProfileUpdated);
+    return () =>
+      window.removeEventListener("profile-updated", handleProfileUpdated);
   }, [loadCurrentUser]);
+
+  useEffect(() => {
+    window.addEventListener("auth-expired", resetAuthState);
+    return () => window.removeEventListener("auth-expired", resetAuthState);
+  }, [resetAuthState]);
 
   const handleLoginSuccess = async () => {
     setLoading(true);
@@ -118,14 +100,8 @@ function App() {
   const isAdmin = user?.is_admin === true || user?.is_superuser === true;
 
   const logout = () => {
-    openPageRequestId.current += 1;
-    clearAuthStorage();
-    clearApiDataCache();
-    setLoggedIn(false);
-    setUser(null);
-    setAuthView("home");
-    setActivePage(null);
-    setShowSidebar(true);
+    clearStoredAuthTokens();
+    resetAuthState();
   };
 
   const handleOpenPage = async (pageKey) => {
@@ -226,7 +202,7 @@ const styles = {
     top: 0,
     background: "var(--app-panel)",
     borderBottom: "1px solid var(--app-border)",
-    padding: "10px 24px",
+    padding: "calc(10px + env(safe-area-inset-top, 0px)) 24px 10px",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",

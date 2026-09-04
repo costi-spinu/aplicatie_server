@@ -81,4 +81,5 @@ export const INSTALL_APP_URLS = parseUrlList(import.meta.env.VITE_INSTALL_URLS);
 
 export const API_ROOT_URL = API_BASE_URL;
 export const TOKEN_URL = new URL("token/", API_ROOT_URL).href;
+export const TOKEN_REFRESH_URL = new URL("token/refresh/", API_ROOT_URL).href;
 export const PASSWORD_RESET_URL = new URL("password-reset/", API_ROOT_URL).href;

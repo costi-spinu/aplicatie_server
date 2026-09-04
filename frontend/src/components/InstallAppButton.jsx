@@ -11,12 +11,35 @@ const getCurrentAppUrl = () => {
 const isLocalHost = (hostname) =>
   ["localhost", "127.0.0.1", "::1"].includes(hostname);
 
+const uniqueUrls = (urls = []) =>
+  Array.from(new Set(urls.map((url) => String(url || "").trim()).filter(Boolean)));
+
+const isIosDevice = () => {
+  if (typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent || "";
+  return (
+    /iphone|ipad|ipod/i.test(userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+};
+
+const isAndroidDevice = () => {
+  if (typeof navigator === "undefined") return false;
+  return /android/i.test(navigator.userAgent || "");
+};
+
+const hasSecureAppContext = () => {
+  if (typeof window === "undefined") return false;
+  return Boolean(window.isSecureContext || isLocalHost(window.location.hostname));
+};
+
 export default function InstallAppButton() {
   const [open, setOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installed, setInstalled] = useState(false);
   const [installUrl, setInstallUrl] = useState(getCurrentAppUrl);
   const [suggestions, setSuggestions] = useState([]);
+  const [qrSvg, setQrSvg] = useState("");
   const [copyLabel, setCopyLabel] = useState("Copiaza link");
 
   useEffect(() => {
@@ -47,9 +70,34 @@ export default function InstallAppButton() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    createQrSvg(installUrl || getCurrentAppUrl(), {
+      border: 4,
+      width: 340,
+    })
+      .then((svg) => {
+        if (!cancelled) setQrSvg(svg);
+      })
+      .catch(() => {
+        if (!cancelled) setQrSvg("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [installUrl]);
+
   const loadInstallInfo = useCallback(async () => {
     const currentUrl = getCurrentAppUrl();
     setInstallUrl(currentUrl);
+    const fallbackUrls = uniqueUrls([...INSTALL_APP_URLS, currentUrl]);
+    setSuggestions(fallbackUrls);
+
+    if (isLocalHost(window.location.hostname) && INSTALL_APP_URLS[0]) {
+      setInstallUrl(INSTALL_APP_URLS[0]);
+    }
 
     try {
       const frontendPort = window.location.port || "5173";
@@ -59,9 +107,11 @@ export default function InstallAppButton() {
           scheme: window.location.protocol.replace(":", "") || "http",
         },
       });
-      const urls = Array.from(
-        new Set([...INSTALL_APP_URLS, ...(response.data?.suggested_urls || [])])
-      );
+      const urls = uniqueUrls([
+        ...INSTALL_APP_URLS,
+        ...(response.data?.suggested_urls || []),
+        currentUrl,
+      ]);
       setSuggestions(urls);
 
       if (isLocalHost(window.location.hostname) && urls[0]) {
@@ -82,7 +132,10 @@ export default function InstallAppButton() {
   const closePanel = () => setOpen(false);
 
   const installOnDevice = async () => {
-    if (!installPrompt) return;
+    if (!installPrompt) {
+      window.location.href = installUrl || getCurrentAppUrl();
+      return;
+    }
 
     installPrompt.prompt();
     await installPrompt.userChoice;
@@ -98,18 +151,32 @@ export default function InstallAppButton() {
     }
   };
 
-  const qrSvg = useMemo(() => {
-    try {
-      return createQrSvg(installUrl || getCurrentAppUrl());
-    } catch {
-      return "";
+  const platformHint = useMemo(() => {
+    if (installed) {
+      return "Aplicatia ruleaza deja in modul instalat.";
     }
-  }, [installUrl]);
+
+    if (isIosDevice()) {
+      return "iPhone: apasa Deschide linkul in Safari, apoi Partajare si Adaugare pe ecranul principal.";
+    }
+
+    if (isAndroidDevice()) {
+      return installPrompt
+        ? "Android: apasa Instaleaza pe dispozitiv."
+        : "Android: deschide linkul in Chrome, apoi meniu si Adauga pe ecranul principal.";
+    }
+
+    return "Scaneaza codul QR cu telefonul si instaleaza din meniul browserului.";
+  }, [installPrompt, installed]);
+
+  const securityHint = hasSecureAppContext()
+    ? "Conexiune pregatita pentru functii moderne ale telefonului."
+    : "Pentru passkeys si Face ID real foloseste HTTPS, de exemplu prin Tailscale HTTPS sau un certificat local.";
 
   return (
     <>
       <button type="button" style={styles.triggerButton} onClick={openPanel}>
-        Instalare
+        Instaleaza aplicatia
       </button>
 
       {open && (
@@ -135,6 +202,11 @@ export default function InstallAppButton() {
               </div>
 
               <div>
+                <div style={styles.hintBox}>
+                  <p style={styles.hintText}>{platformHint}</p>
+                  <p style={styles.hintText}>{securityHint}</p>
+                </div>
+
                 <label style={styles.label}>
                   Adresa aplicatie
                   <input
@@ -143,6 +215,10 @@ export default function InstallAppButton() {
                     onChange={(event) => setInstallUrl(event.target.value)}
                   />
                 </label>
+
+                <a style={styles.directLink} href={installUrl}>
+                  {installUrl}
+                </a>
 
                 {suggestions.length > 0 && (
                   <div style={styles.suggestions}>
@@ -162,14 +238,15 @@ export default function InstallAppButton() {
                 <div style={styles.actions}>
                   <button
                     type="button"
-                    style={{
-                      ...styles.primaryButton,
-                      ...(installPrompt && !installed ? {} : styles.disabledButton),
-                    }}
+                    style={styles.primaryButton}
                     onClick={installOnDevice}
-                    disabled={!installPrompt || installed}
+                    disabled={installed}
                   >
-                    {installed ? "Aplicatie instalata" : "Instaleaza pe dispozitiv"}
+                    {installed
+                      ? "Aplicatie instalata"
+                      : installPrompt
+                        ? "Instaleaza pe dispozitiv"
+                        : "Deschide linkul"}
                   </button>
                   <button type="button" style={styles.secondaryButton} onClick={copyLink}>
                     {copyLabel}
@@ -190,8 +267,9 @@ const styles = {
     background: "var(--app-panel-alt)",
     color: "var(--app-text)",
     borderRadius: 4,
-    padding: "7px 9px",
-    fontSize: 12,
+    padding: "10px 12px",
+    minHeight: 44,
+    fontSize: 14,
     fontWeight: 800,
     cursor: "pointer",
   },
@@ -203,10 +281,13 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: 18,
+    padding: "max(12px, env(safe-area-inset-top, 0px)) 12px max(12px, env(safe-area-inset-bottom, 0px))",
+    overflow: "auto",
   },
   panel: {
-    width: "min(680px, 100%)",
+    width: "min(760px, 100%)",
+    maxHeight: "calc(100dvh - 24px)",
+    overflow: "auto",
     background: "var(--app-panel)",
     border: "1px solid var(--app-border)",
     borderTop: "4px solid var(--app-primary)",
@@ -239,7 +320,7 @@ const styles = {
   },
   contentGrid: {
     display: "grid",
-    gridTemplateColumns: "220px minmax(0, 1fr)",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
     gap: 16,
     alignItems: "start",
   },
@@ -247,14 +328,14 @@ const styles = {
     border: "1px solid var(--app-border)",
     background: "#ffffff",
     borderRadius: 4,
-    padding: 10,
+    padding: 16,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
   },
   qrSvg: {
-    width: 200,
-    height: 200,
+    width: "min(320px, 74vw)",
+    height: "min(320px, 74vw)",
     overflow: "hidden",
   },
   qrFallback: {
@@ -265,6 +346,20 @@ const styles = {
     justifyContent: "center",
     color: "#10201a",
     fontWeight: 800,
+  },
+  hintBox: {
+    border: "1px solid var(--app-border-soft)",
+    background: "var(--app-panel-alt)",
+    borderRadius: 4,
+    padding: "10px 12px",
+    marginBottom: 12,
+  },
+  hintText: {
+    margin: "0 0 6px",
+    color: "var(--app-muted)",
+    fontSize: 13,
+    lineHeight: 1.45,
+    fontWeight: 700,
   },
   label: {
     display: "block",
@@ -283,6 +378,15 @@ const styles = {
     padding: "9px 10px",
     marginTop: 6,
     fontSize: 14,
+  },
+  directLink: {
+    display: "block",
+    color: "var(--app-primary-dark)",
+    fontSize: 13,
+    fontWeight: 800,
+    lineHeight: 1.4,
+    margin: "-2px 0 12px",
+    overflowWrap: "anywhere",
   },
   suggestions: {
     display: "grid",
@@ -314,10 +418,6 @@ const styles = {
     padding: "10px 12px",
     fontWeight: 800,
     cursor: "pointer",
-  },
-  disabledButton: {
-    opacity: 0.58,
-    cursor: "not-allowed",
   },
   secondaryButton: {
     border: "1px solid var(--app-border)",

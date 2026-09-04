@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-import { getCachedApiData } from "../services/apiConfig";
+import {
+  areCachedApiEndpointsFresh,
+  getCachedApiData,
+  isCachedApiDataFresh,
+} from "../services/apiConfig";
+import { VENIT_DATA_ENDPOINTS } from "../services/preloadEndpoints";
 import styles from "../styles/iosStyles";
+import { translateCurrentText } from "../contexts/AppSettingsContext";
+import {
+  formatBudgetCycleLabel,
+  getBudgetCycleKey,
+} from "../utils/cheltuieliUtils";
 
 const RON_TO_EUR_FALLBACK = 0.2;
 
-const getCurrentCycleRange = () => {
+const getDefaultCycleRange = () => {
   const today = new Date();
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -23,14 +33,30 @@ const getCurrentCycleRange = () => {
   };
 };
 
+const parseApiDate = (value) => {
+  const [year, month, day] = String(value || "")
+    .split("-")
+    .map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
+const getCycleRange = (period) => {
+  const start = parseApiDate(period?.start);
+  const endDate = parseApiDate(period?.end);
+  if (!start || !endDate) return getDefaultCycleRange();
+  endDate.setHours(23, 59, 59, 999);
+  return { start, end: endDate };
+};
+
 const toDateOnly = (value) => {
   const date = new Date(value);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 };
 
 const round2 = (value) => Math.round(value * 100) / 100;
-const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
-const getIncomeMonthKey = (item) => String(item.data || "").slice(0, 7);
+const getIncomeCycleKey = (item, startDay) =>
+  getBudgetCycleKey(item.data, startDay);
 const todayIso = () => new Date().toISOString().split("T")[0];
 const emptySalaryForm = {
   data: todayIso(),
@@ -66,6 +92,9 @@ export default function Venit() {
   const cachedMe = getCachedApiData("me/");
   const cachedSalarySchedules = getCachedApiData("salary-schedules/");
   const cachedCredits = getCachedApiData("credite/");
+  const cachedArchives = getCachedApiData("arhive/");
+  const cachedPeriod =
+    getCachedApiData("perioada-bugetara/") || getCachedApiData("buget/lunar/");
   const cachedBudget = getCachedApiData("buget/lunar/");
   const cachedIncomeSummary = cachedBudget
     ? buildIncomeSummary(cachedBudget)
@@ -105,8 +134,18 @@ export default function Venit() {
   const [creditMoneda, setCreditMoneda] = useState("EUR");
   const [creditData, setCreditData] = useState(todayIso());
   const [incomeSummary, setIncomeSummary] = useState(cachedIncomeSummary);
+  const [budgetPeriod, setBudgetPeriod] = useState(cachedPeriod || null);
+  const [periodStartDay, setPeriodStartDay] = useState(
+    String(cachedPeriod?.start_day || 26)
+  );
+  const [periodSaving, setPeriodSaving] = useState(false);
+  const [archives, setArchives] = useState(() =>
+    Array.isArray(cachedArchives) ? cachedArchives : []
+  );
+  const [archiveRunning, setArchiveRunning] = useState(false);
+  const budgetStartDay = Number(budgetPeriod?.start_day || 26);
 
-  const cycleRange = useMemo(() => getCurrentCycleRange(), []);
+  const cycleRange = useMemo(() => getCycleRange(budgetPeriod), [budgetPeriod]);
   const formatDateTime = (dt) => new Date(dt).toLocaleString("ro-RO");
   const formatDate = (dateObj) => dateObj.toLocaleDateString("ro-RO");
 
@@ -137,46 +176,123 @@ export default function Venit() {
     [ronToEurRate]
   );
 
-  const calculateCurrentCycleTotal = useCallback(
-    (items) => {
-      const totalCycle = items
-        .filter((item) => {
-          const incomeDate = toDateOnly(item.data);
-          return incomeDate >= cycleRange.start && incomeDate <= cycleRange.end;
-        })
-        .reduce((sum, item) => sum + convertToEur(item.suma, item.moneda), 0);
-
-      return round2(totalCycle);
-    },
-    [convertToEur, cycleRange]
-  );
-
   const loadData = useCallback(async () => {
     try {
-      const [all, meRes, salaryRes, creditsRes, budgetRes] = await Promise.all([
+      const [
+        all,
+        meRes,
+        salaryRes,
+        creditsRes,
+        budgetRes,
+        periodRes,
+        archivesRes,
+      ] = await Promise.all([
         api.get("venituri/"),
         api.get("me/"),
         api.get("salary-schedules/"),
         api.get("credite/"),
         api.get("buget/lunar/"),
+        api.get("perioada-bugetara/"),
+        api.get("arhive/"),
       ]);
       const nextIncomeSummary = buildIncomeSummary(budgetRes.data);
       setAllVenituri(all.data || []);
-      setTotal(nextIncomeSummary.venitNet || calculateCurrentCycleTotal(all.data || []));
+      setTotal(nextIncomeSummary.venitNet);
       setCurrentUser(meRes.data);
       setSalarySchedules(salaryRes.data || []);
       setCredits(creditsRes.data || []);
       setIncomeSummary(nextIncomeSummary);
+      setBudgetPeriod(periodRes.data || budgetRes.data || null);
+      setPeriodStartDay(String(periodRes.data?.start_day || 26));
+      setArchives(Array.isArray(archivesRes.data) ? archivesRes.data : []);
     } catch (err) {
       console.error("Eroare venit:", err);
     }
-  }, [calculateCurrentCycleTotal]);
+  }, []);
+
+  const saveBudgetPeriod = async () => {
+    const nextStartDay = Number(periodStartDay);
+    if (!Number.isInteger(nextStartDay) || nextStartDay < 1 || nextStartDay > 31) {
+      setMsg("Ziua de început trebuie să fie între 1 și 31.");
+      return;
+    }
+
+    setPeriodSaving(true);
+    setMsg(null);
+    try {
+      const response = await api.patch("perioada-bugetara/", {
+        start_day: nextStartDay,
+      });
+      setBudgetPeriod(response.data);
+      setPeriodStartDay(String(response.data.start_day));
+      await loadData();
+      setMsg("Perioada a fost salvată pentru acest cont.");
+    } catch (error) {
+      const detail = error.response?.data?.start_day;
+      setMsg(Array.isArray(detail) ? detail.join(" ") : "Perioada nu a putut fi salvată.");
+    } finally {
+      setPeriodSaving(false);
+    }
+  };
+
+  const runArchive = async () => {
+    if (
+      !window.confirm(
+        translateCurrentText(
+          "Arhivezi acum perioadele mai vechi? Datele sunt șterse din baza de date numai după verificarea fișierelor."
+        )
+      )
+    ) {
+      return;
+    }
+
+    setArchiveRunning(true);
+    setMsg(null);
+    try {
+      const response = await api.post("arhive/ruleaza/");
+      const count = response.data?.archives?.length || 0;
+      await loadData();
+      setMsg(
+        count
+          ? `${count} perioadă/perioade au fost arhivate cu succes.`
+          : "Nu există perioade eligibile; ciclul curent și cel anterior rămân în baza de date."
+      );
+    } catch (error) {
+      setMsg(
+        error.response?.data?.detail ||
+          "Arhivarea a fost oprită. Datele neverificate au rămas în baza de date."
+      );
+    } finally {
+      setArchiveRunning(false);
+    }
+  };
+
+  const downloadArchive = async (archive, format) => {
+    try {
+      const response = await api.get(`arhive/${archive.id}/${format}/`, {
+        responseType: "blob",
+      });
+      const extension = format === "pdf" ? "pdf" : "xlsx";
+      const blobUrl = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `arhiva-financiara-${archive.period_start}-${archive.period_end}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      setMsg("Fișierul arhivat nu a putut fi descărcat sau nu mai trece verificarea.");
+    }
+  };
 
   useEffect(() => {
+    if (isCachedApiDataFresh("curs-bnr/")) return;
     fetchExchangeRate();
   }, [fetchExchangeRate]);
 
   useEffect(() => {
+    if (areCachedApiEndpointsFresh(VENIT_DATA_ENDPOINTS)) return;
     loadData();
   }, [loadData]);
 
@@ -245,7 +361,7 @@ export default function Venit() {
   };
 
   const stergeVenit = async (id) => {
-    if (!window.confirm("Sigur stergi acest venit?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi acest venit?"))) return;
 
     try {
       await api.delete(`venituri/${id}/`);
@@ -272,17 +388,20 @@ export default function Venit() {
   );
   const monthlyIncomeRows = useMemo(() => {
     const totals = allVenituri.reduce((acc, item) => {
-      const key = getIncomeMonthKey(item);
+      const key = getIncomeCycleKey(item, budgetStartDay);
       if (!key) return acc;
-      acc[key] = (acc[key] || 0) + Number(item.suma || 0);
+      acc[key] =
+        (acc[key] || 0) + convertToEur(item.suma, item.moneda);
       return acc;
     }, {});
+    const currentCycleKey =
+      budgetPeriod?.cycle_key || getBudgetCycleKey(new Date(), budgetStartDay);
 
     return Object.entries(totals)
       .map(([key, sum]) => ({ key, sum }))
-      .filter((item) => item.key < getCurrentMonthKey())
+      .filter((item) => item.key < currentCycleKey)
       .sort((a, b) => b.key.localeCompare(a.key));
-  }, [allVenituri]);
+  }, [allVenituri, budgetPeriod?.cycle_key, budgetStartDay, convertToEur]);
   const normalizedSelectedHistoryMonth =
     selectedHistoryMonth &&
     monthlyIncomeRows.some((item) => item.key === selectedHistoryMonth)
@@ -291,12 +410,13 @@ export default function Venit() {
   const selectedHistoryRows = useMemo(
     () =>
       recordsVenituri.filter(
-        (item) => getIncomeMonthKey(item) === normalizedSelectedHistoryMonth
+        (item) =>
+          getIncomeCycleKey(item, budgetStartDay) === normalizedSelectedHistoryMonth
       ),
-    [normalizedSelectedHistoryMonth, recordsVenituri]
+    [budgetStartDay, normalizedSelectedHistoryMonth, recordsVenituri]
   );
   const selectedHistoryTotal = selectedHistoryRows.reduce(
-    (acc, item) => acc + Number(item.suma || 0),
+    (acc, item) => acc + convertToEur(item.suma, item.moneda),
     0
   );
   const salaryPreviewEur =
@@ -321,6 +441,11 @@ export default function Venit() {
     rateSource === "BNR" && eurRonRate
       ? `Curs BNR: 1 EUR = ${eurRonRate} RON${rateDate ? ` (${rateDate})` : ""}`
       : "Curs BNR indisponibil, folosesc curs fallback.";
+  const automaticDeductionDate = useMemo(() => {
+    const deductionDate = new Date(cycleRange.start);
+    deductionDate.setDate(deductionDate.getDate() + 1);
+    return formatDate(deductionDate);
+  }, [cycleRange.start]);
 
   const updateSalaryField = (field, value) =>
     setSalaryForm((prev) => ({ ...prev, [field]: value }));
@@ -363,7 +488,9 @@ export default function Venit() {
   };
 
   const deleteSalary = async (id) => {
-    if (!window.confirm("Sigur stergi acest salariu automat?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi acest salariu automat?"))) {
+      return;
+    }
 
     try {
       await api.delete(`salary-schedules/${id}/`);
@@ -414,7 +541,7 @@ export default function Venit() {
   };
 
   const deleteCredit = async (id) => {
-    if (!window.confirm("Sigur stergi acest credit?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi acest credit?"))) return;
 
     try {
       await api.delete(`credite/${id}/`);
@@ -426,16 +553,37 @@ export default function Venit() {
     }
   };
 
-  const exportExcel = () => {
-    const header = "Data,Suma,Moneda,Utilizator,Sursa\n";
+  const buildIncomeExportHtml = () => {
     const rows = selectedHistoryRows
       .map(
         (v) =>
-          `${v.data},${v.suma},${v.moneda},${v.username || currentUser?.username || ""},${v.sursa || "manual"}`
+          `<tr><td>${escapeHtml(v.data)}</td><td>${escapeHtml(v.suma)}</td><td>${escapeHtml(v.moneda)}</td><td>${escapeHtml(convertToEur(v.suma, v.moneda).toFixed(2))}</td><td>${escapeHtml(v.username || currentUser?.username || "")}</td><td>${escapeHtml(v.sursa || "manual")}</td></tr>`
       )
-      .join("\n");
-    const blob = new Blob([header + rows], {
-      type: "application/vnd.ms-excel;charset=utf-8;",
+      .join("");
+
+    return `<!doctype html><html><head><meta charset="UTF-8" /><title>Venituri ${escapeHtml(normalizedSelectedHistoryMonth)}</title><style>
+      body { font-family: Segoe UI, Arial, sans-serif; color: #10201a; margin: 28px; }
+      h1 { font-size: 22px; margin: 0 0 6px; }
+      .meta { color: #5f6f66; font-size: 12px; margin-bottom: 16px; }
+      .total { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #cfd8d3; padding: 7px 8px; text-align: left; font-size: 12px; }
+      th { background: #eef2f1; font-weight: 700; }
+      tr { page-break-inside: avoid; }
+      @media print { body { margin: 14mm; } }
+    </style></head><body>
+      <h1>Venituri ${escapeHtml(
+        formatBudgetCycleLabel(normalizedSelectedHistoryMonth, budgetStartDay)
+      )}</h1>
+      <div class="meta">Generat la ${escapeHtml(new Date().toLocaleString("ro-RO"))}</div>
+      <div class="total">Total venit luna selectata: ${selectedHistoryTotal.toFixed(2)} EUR</div>
+      <table><thead><tr><th>Data</th><th>Suma initiala</th><th>Moneda</th><th>Suma EUR</th><th>Utilizator</th><th>Sursa</th></tr></thead><tbody>${rows}</tbody></table>
+    </body></html>`;
+  };
+
+  const exportExcel = () => {
+    const blob = new Blob([buildIncomeExportHtml()], {
+      type: "application/vnd.ms-excel;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -446,32 +594,9 @@ export default function Venit() {
   };
 
   const exportPdf = () => {
-    const rows = selectedHistoryRows
-      .map(
-        (v) =>
-          `<tr><td>${escapeHtml(v.data)}</td><td>${escapeHtml(v.suma)}</td><td>${escapeHtml(v.moneda)}</td><td>${escapeHtml(v.username || currentUser?.username || "")}</td><td>${escapeHtml(v.sursa || "manual")}</td></tr>`
-      )
-      .join("");
     const win = window.open("", "_blank");
     if (!win) return;
-    win.document.write(
-      `<!doctype html><html><head><meta charset="UTF-8" /><title>Venituri ${escapeHtml(normalizedSelectedHistoryMonth)}</title><style>
-        body { font-family: Segoe UI, Arial, sans-serif; color: #10201a; margin: 28px; }
-        h1 { font-size: 22px; margin: 0 0 6px; }
-        .meta { color: #5f6f66; font-size: 12px; margin-bottom: 16px; }
-        .total { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #cfd8d3; padding: 7px 8px; text-align: left; font-size: 12px; }
-        th { background: #eef2f1; font-weight: 700; }
-        tr { page-break-inside: avoid; }
-        @media print { body { margin: 14mm; } }
-      </style></head><body>
-        <h1>Venituri ${escapeHtml(normalizedSelectedHistoryMonth)}</h1>
-        <div class="meta">Generat la ${escapeHtml(new Date().toLocaleString("ro-RO"))}</div>
-        <div class="total">Total venit luna selectata: ${selectedHistoryTotal.toFixed(2)} EUR</div>
-        <table><thead><tr><th>Data</th><th>Suma</th><th>Moneda</th><th>Utilizator</th><th>Sursa</th></tr></thead><tbody>${rows}</tbody></table>
-      </body></html>`
-    );
+    win.document.write(buildIncomeExportHtml());
     win.document.close();
     win.focus();
     win.print();
@@ -512,6 +637,15 @@ export default function Venit() {
         <button
           style={{
             ...localStyles.segmentBtn,
+            ...(activeTab === "period" ? localStyles.segmentBtnActive : {}),
+          }}
+          onClick={() => setActiveTab("period")}
+        >
+          Perioada
+        </button>
+        <button
+          style={{
+            ...localStyles.segmentBtn,
             ...(activeTab === "records" ? localStyles.segmentBtnActive : {}),
           }}
           onClick={() => setActiveTab("records")}
@@ -548,7 +682,7 @@ export default function Venit() {
                 <strong>-{incomeSummary.deduceriCredite.toFixed(2)} EUR</strong>
               </div>
               <div>
-                <span>Scazut automate pe 27</span>
+                <span>Scăzut automat la {automaticDeductionDate}</span>
                 <strong>-{incomeSummary.deduceriAutomate.toFixed(2)} EUR</strong>
               </div>
             </div>
@@ -800,6 +934,119 @@ export default function Venit() {
         </>
       )}
 
+      {activeTab === "period" && (
+        <>
+          {msg && <div style={styles.message}>{msg}</div>}
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>Perioada contului</h3>
+            <p style={localStyles.periodHelp}>
+              Alege ziua în care începe lunar perioada. Veniturile și
+              cheltuielile sunt calculate din acea zi inclusiv până în ziua
+              anterioară următoarei perioade. Setarea aparține numai contului
+              {currentUser?.username ? ` ${currentUser.username}` : " curent"}.
+            </p>
+            <label style={localStyles.fieldLabel} htmlFor="budget-cycle-start-day">
+              Ziua de început (1–31)
+            </label>
+            <input
+              id="budget-cycle-start-day"
+              style={styles.input}
+              type="number"
+              min="1"
+              max="31"
+              inputMode="numeric"
+              value={periodStartDay}
+              onChange={(event) => setPeriodStartDay(event.target.value)}
+            />
+            <button
+              style={styles.blueButton}
+              onClick={saveBudgetPeriod}
+              disabled={periodSaving}
+            >
+              {periodSaving ? "Se salvează..." : "Salvează perioada"}
+            </button>
+          </div>
+
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>Interval activ</h3>
+            <div style={localStyles.periodRange}>
+              <div>
+                <span>De la</span>
+                <strong>{budgetPeriod?.start || todayIso()}</strong>
+              </div>
+              <div>
+                <span>Până la (inclusiv)</span>
+                <strong>{budgetPeriod?.end || todayIso()}</strong>
+              </div>
+              <div>
+                <span>Următoarea perioadă începe</span>
+                <strong>{budgetPeriod?.next_start || "-"}</strong>
+              </div>
+            </div>
+            <p style={localStyles.periodHelp}>
+              Pentru zilele 29, 30 sau 31, aplicația folosește automat ultima
+              zi disponibilă în lunile mai scurte.
+            </p>
+          </div>
+
+          <div style={styles.card}>
+            <h3 style={styles.sectionTitle}>Arhivă locală</h3>
+            <p style={localStyles.periodHelp}>
+              Aplicația păstrează în baza de date perioada curentă și
+              perioada anterioară. Cele mai vechi sunt salvate privat pe server
+              ca PDF, Excel și JSON verificabil, apoi eliminate din tabelele active.
+            </p>
+            <button
+              style={styles.greenButton}
+              onClick={runArchive}
+              disabled={archiveRunning}
+            >
+              {archiveRunning ? "Se arhivează..." : "Arhivează acum"}
+            </button>
+
+            <div style={localStyles.archiveList}>
+              {archives.length === 0 && (
+                <div style={styles.message}>Nu există încă perioade arhivate.</div>
+              )}
+              {archives.map((archive) => {
+                const recordsCount = Object.values(archive.record_counts || {}).reduce(
+                  (sum, value) => sum + Number(value || 0),
+                  0
+                );
+                return (
+                  <div key={archive.id} style={localStyles.archiveRow}>
+                    <div>
+                      <strong>
+                        {archive.period_start} – {archive.period_end}
+                      </strong>
+                      <div style={localStyles.userText}>
+                        {recordsCount} înregistrări · economii {Number(
+                          archive.totals?.economii || 0
+                        ).toFixed(2)} EUR
+                      </div>
+                    </div>
+                    <div style={localStyles.rowActions}>
+                      <button
+                        style={styles.blueButton}
+                        onClick={() => downloadArchive(archive, "excel")}
+                      >
+                        Excel
+                      </button>
+                      <button
+                        style={styles.greenButton}
+                        onClick={() => downloadArchive(archive, "pdf")}
+                      >
+                        PDF
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
       {activeTab === "records" && (
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>Inregistrari venit</h3>
@@ -868,7 +1115,8 @@ export default function Venit() {
               >
                 {monthlyIncomeRows.map((row) => (
                   <option key={row.key} value={row.key}>
-                    {row.key} - {row.sum.toFixed(2)} EUR
+                    {formatBudgetCycleLabel(row.key, budgetStartDay)} -{" "}
+                    {row.sum.toFixed(2)} EUR
                   </option>
                 ))}
               </select>
@@ -992,6 +1240,38 @@ const localStyles = {
     borderRadius: 4,
     padding: "10px 12px",
     marginBottom: 12,
+    background: "var(--app-panel-alt)",
+  },
+  periodHelp: {
+    color: "var(--app-muted)",
+    lineHeight: 1.5,
+    marginTop: 0,
+  },
+  fieldLabel: {
+    display: "block",
+    fontWeight: 700,
+    marginBottom: 8,
+  },
+  periodRange: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+    gap: 10,
+    marginBottom: 14,
+  },
+  archiveList: {
+    display: "grid",
+    gap: 10,
+    marginTop: 16,
+  },
+  archiveRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap",
+    padding: 12,
+    border: "1px solid var(--app-border)",
+    borderRadius: 4,
     background: "var(--app-panel-alt)",
   },
   checkRow: {

@@ -1,37 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-import { getCachedApiData } from "../services/apiConfig";
+import {
+  areCachedApiEndpointsFresh,
+  getCachedApiData,
+} from "../services/apiConfig";
+import { ECONOMII_ENDPOINTS } from "../services/preloadEndpoints";
 import styles from "../styles/iosStyles";
-
-function getLunaFinanciara(dateStr) {
-  const d = new Date(`${dateStr}T12:00:00`);
-  const zi = d.getDate();
-  let luna = d.getMonth();
-  let an = d.getFullYear();
-
-  if (zi >= 26) luna += 1;
-  if (luna === 12) {
-    luna = 0;
-    an += 1;
-  }
-
-  return `${an}-${String(luna + 1).padStart(2, "0")}`;
-}
+import { translateCurrentText } from "../contexts/AppSettingsContext";
 
 export default function Economii() {
-  const cachedVenituri = getCachedApiData("venituri/");
-  const cachedFixe = getCachedApiData("cheltuieli-fixe/");
   const cachedVariabile = getCachedApiData("cheltuieli-variabile/");
+  const cachedHistory = getCachedApiData("economii/istoric/");
+  const cachedVacationSummary = getCachedApiData("economii/vacanta/");
 
   const [activeTab, setActiveTab] = useState("economii");
-  const [venituri, setVenituri] = useState(() =>
-    Array.isArray(cachedVenituri) ? cachedVenituri : []
-  );
-  const [fixe, setFixe] = useState(() =>
-    Array.isArray(cachedFixe) ? cachedFixe : []
-  );
   const [variabile, setVariabile] = useState(() =>
     Array.isArray(cachedVariabile) ? cachedVariabile : []
+  );
+  const [istoric, setIstoric] = useState(() =>
+    Array.isArray(cachedHistory) ? cachedHistory : []
+  );
+  const [vacationSummary, setVacationSummary] = useState(
+    cachedVacationSummary || {
+      puse_deoparte: 0,
+      cheltuite: 0,
+      ramase: 0,
+    }
   );
   const [sumaVacanta, setSumaVacanta] = useState("");
   const [dataVacanta, setDataVacanta] = useState(
@@ -46,14 +40,14 @@ export default function Economii() {
 
   const loadData = useCallback(async () => {
     try {
-      const [v, f, va] = await Promise.all([
-        api.get("venituri/"),
-        api.get("cheltuieli-fixe/"),
+      const [historyRes, variableRes, vacationRes] = await Promise.all([
+        api.get("economii/istoric/"),
         api.get("cheltuieli-variabile/"),
+        api.get("economii/vacanta/"),
       ]);
-      setVenituri(v.data || []);
-      setFixe(f.data || []);
-      setVariabile(va.data || []);
+      setIstoric(historyRes.data || []);
+      setVariabile(variableRes.data || []);
+      setVacationSummary(vacationRes.data || {});
       setMsg("");
     } catch (error) {
       console.error("Eroare la incarcarea economiilor:", error);
@@ -62,76 +56,29 @@ export default function Economii() {
   }, []);
 
   useEffect(() => {
+    if (areCachedApiEndpointsFresh(ECONOMII_ENDPOINTS)) return;
     void Promise.resolve().then(loadData);
   }, [loadData]);
 
-  const istoric = useMemo(() => {
-    const data = {};
-
-    [...venituri, ...fixe, ...variabile].forEach((item) => {
-      const luna = getLunaFinanciara(item.data);
-
-      if (!data[luna]) {
-        data[luna] = {
-          venit: 0,
-          fixe: 0,
-          variabile: 0,
-          investitii: 0,
-          economii: 0,
-        };
-      }
-    });
-
-    venituri.forEach((v) => {
-      const luna = getLunaFinanciara(v.data);
-      data[luna].venit += Number(v.suma);
-    });
-
-    fixe.forEach((c) => {
-      const luna = getLunaFinanciara(c.data);
-      data[luna].fixe += Number(c.suma);
-    });
-
-    variabile.forEach((c) => {
-      const luna = getLunaFinanciara(c.data);
-
-      if (c.categorie === "investitii") {
-        data[luna].investitii += Number(c.suma);
-      } else {
-        data[luna].variabile += Number(c.suma);
-      }
-    });
-
-    Object.values(data).forEach((l) => {
-      l.economii = l.venit - l.fixe - l.variabile - l.investitii;
-    });
-
-    return data;
-  }, [venituri, fixe, variabile]);
-
-  const luniSortate = Object.entries(istoric).sort(([a], [b]) =>
-    b.localeCompare(a)
+  const luniSortate = useMemo(
+    () => istoric.slice().sort((a, b) => b.luna.localeCompare(a.luna)),
+    [istoric]
   );
 
-  const totalRecent = Object.values(istoric).reduce(
-    (total, luna) => total + Number(luna.economii || 0),
+  const totalRecent = istoric.reduce(
+    (total, luna) => total + Number(luna.economii ?? luna.sold ?? 0),
     0
   );
 
   const formatAmount = (value) => Number(value || 0).toFixed(2);
 
-  const totalVacanta = variabile
-    .filter((v) => v.categorie === "vacanta")
-    .reduce((s, v) => s + Number(v.suma), 0);
+  const totalVacanta = Number(vacationSummary.puse_deoparte || 0);
   const totalEconomiiIntroduse = variabile
     .filter((v) => v.categorie === "economii")
     .reduce((s, v) => s + Number(v.suma), 0);
 
-  const totalCheltuit = variabile
-    .filter((v) => v.categorie === "vacanta_cheltuita")
-    .reduce((s, v) => s + Number(v.suma), 0);
-
-  const totalRamasVacanta = totalVacanta - totalCheltuit;
+  const totalCheltuit = Number(vacationSummary.cheltuite || 0);
+  const totalRamasVacanta = Number(vacationSummary.ramase || 0);
 
   const adaugaVacanta = async () => {
     if (!sumaVacanta) return;
@@ -179,7 +126,9 @@ export default function Economii() {
   };
 
   const stergeCheltuialaVacanta = async (cheltuialaId) => {
-    if (!window.confirm("Sigur stergi cheltuiala de vacanta?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi cheltuiala de vacanta?"))) {
+      return;
+    }
 
     await api.delete(`cheltuieli-variabile/${cheltuialaId}/`);
 
@@ -239,19 +188,32 @@ export default function Economii() {
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>Istoric economii lunare</h3>
 
-          {luniSortate.map(([luna, l]) => (
-            <div key={luna} style={styles.row}>
-              <span>{luna}</span>
-              <span
-                style={{
-                  color: l.economii >= 0 ? "var(--app-success)" : "var(--app-danger)",
-                  fontWeight: 800,
-                }}
-              >
-                {formatAmount(l.economii)} EUR
-              </span>
-            </div>
-          ))}
+          {luniSortate.map((l) => {
+            const saved = Number(l.economii ?? l.sold ?? 0);
+            return (
+              <div key={l.luna} style={{ ...styles.row, display: "block" }}>
+                <div style={localStyles.historyHeading}>
+                  <span>{l.luna}</span>
+                  <span
+                    style={{
+                      color:
+                        saved >= 0 ? "var(--app-success)" : "var(--app-danger)",
+                      fontWeight: 800,
+                    }}
+                  >
+                    {formatAmount(saved)} EUR
+                  </span>
+                </div>
+                <div style={styles.date}>
+                  {l.start} - {l.end} | Venit brut {formatAmount(l.venit_brut)} EUR
+                  | Credite {formatAmount(l.deduceri_credite)} EUR | Fixe automate{" "}
+                  {formatAmount(l.fixe_automate)} EUR | Fixe manuale{" "}
+                  {formatAmount(l.fixe_manuale)} EUR | Variabile{" "}
+                  {formatAmount(l.variabile)} EUR
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -361,6 +323,12 @@ export default function Economii() {
 }
 
 const localStyles = {
+  historyHeading: {
+    alignItems: "center",
+    display: "flex",
+    justifyContent: "space-between",
+    marginBottom: 5,
+  },
   summaryGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",

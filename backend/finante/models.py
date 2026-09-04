@@ -1,6 +1,7 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import User
-from django.utils.timezone import now
 from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -105,7 +106,7 @@ class CheltuialaFixa(models.Model):
         on_delete=models.CASCADE,
         related_name="cheltuieli_fixe",
     )
-    descriere = models.CharField(max_length=100)
+    descriere = models.CharField(max_length=100, blank=True, default="")
     suma = models.DecimalField(max_digits=10, decimal_places=2)
     moneda = models.CharField(max_length=3, choices=Moneda.choices)
     sursa = models.CharField(max_length=30, blank=True, default="manual")
@@ -164,6 +165,7 @@ class CheltuialaVariabila(models.Model):
         max_length=20,
         choices=CategorieVariabila.choices,
     )
+    descriere = models.CharField(max_length=100, blank=True, default="")
     suma = models.DecimalField(max_digits=10, decimal_places=2)
     moneda = models.CharField(max_length=3, choices=Moneda.choices)
 
@@ -242,24 +244,6 @@ class Fond(models.Model):
 
     def __str__(self):
         return f"{self.user.username} | EUR: {self.suma_eur} | RON: {self.suma_ron}"
-
-
-# class MiscareFond(models.Model):
-#     TIP = (
-#         ("adauga", "Adauga"),
-#         ("retrage", "Retrage"),
-#     )
-
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     tip = models.CharField(max_length=10, choices=TIP)
-#     suma_eur = models.DecimalField(
-#         max_digits=10, decimal_places=2, null=True, blank=True
-#     )
-#     suma_ron = models.DecimalField(
-#         max_digits=10, decimal_places=2, null=True, blank=True
-#     )
-#     observatii = models.TextField(blank=True)
-#     data = models.DateField(auto_now_add=True)
 
 
 class MiscareFond(models.Model):
@@ -344,10 +328,6 @@ class InvestitieAutomata(models.Model):
     def __str__(self):
         return f"{self.user.username} | {self.rubrica} | EUR:{self.suma_eur} RON:{self.suma_ron}"
 
-
-from django.contrib.auth.models import User
-
-
 class UserBridge(models.Model):
     from_user = models.ForeignKey(
         User, related_name="sent_bridges", on_delete=models.CASCADE
@@ -410,6 +390,10 @@ class UserProfile(models.Model):
     venit_estimat_lunar = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    budget_cycle_start_day = models.PositiveSmallIntegerField(
+        default=26,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -457,3 +441,47 @@ class EmailChangeRequest(models.Model):
 
     def __str__(self):
         return f"{self.user.username} -> {self.new_email}"
+
+
+class FinancialArchive(models.Model):
+    class Status(models.TextChoices):
+        BUILDING = "building", "În curs"
+        READY = "ready", "Pregătită"
+        FAILED = "failed", "Eșuată"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="financial_archives",
+    )
+    period_start = models.DateField()
+    period_end = models.DateField()
+    cycle_key = models.CharField(max_length=7)
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.BUILDING,
+    )
+    relative_dir = models.CharField(max_length=300, blank=True, default="")
+    source_digest = models.CharField(max_length=64, blank=True, default="")
+    manifest_sha256 = models.CharField(max_length=64, blank=True, default="")
+    record_counts = models.JSONField(default=dict, blank=True)
+    totals = models.JSONField(default=dict, blank=True)
+    files = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-period_end", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "period_start", "period_end"),
+                name="unique_financial_archive_period_per_user",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} | {self.period_start} - {self.period_end}"

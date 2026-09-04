@@ -1,0 +1,12 @@
+[Unit]
+Description=Rulează zilnic arhivarea datelor financiare vechi
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=aplicatie-archive.service
+
+[Install]
+WantedBy=timers.target
+

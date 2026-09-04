@@ -3,9 +3,31 @@ import { API_BASE_URL, API_BASE_URLS } from "../helpers/appConstants";
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: Number(import.meta.env.VITE_API_TIMEOUT_MS || 12000),
 });
 
+export const getActiveApiBaseUrl = () => api.defaults.baseURL || API_BASE_URL;
+
 const responseCache = new Map();
+const responseCacheTimestamps = new Map();
+export const FRESH_CACHE_WINDOW_MS = 2500;
+let refreshTokenRequest = null;
+
+export const clearStoredAuthTokens = () => {
+  localStorage.removeItem("access");
+  localStorage.removeItem("refresh");
+  window.dispatchEvent(new Event("auth-expired"));
+};
+
+const storeAuthTokens = (tokens = {}) => {
+  if (tokens.access) {
+    localStorage.setItem("access", tokens.access);
+  }
+
+  if (tokens.refresh) {
+    localStorage.setItem("refresh", tokens.refresh);
+  }
+};
 
 const normalizeCacheKey = (url = "", params = {}) => {
   const cleanParams = Object.entries(params || {})
@@ -27,11 +49,31 @@ export const getCachedApiData = (url, params) =>
 
 export const setCachedApiData = (url, data, params) => {
   if (!url) return;
-  responseCache.set(normalizeCacheKey(url, params), data);
+  const cacheKey = normalizeCacheKey(url, params);
+  responseCache.set(cacheKey, data);
+  responseCacheTimestamps.set(cacheKey, Date.now());
 };
+
+export const getCachedApiDataAge = (url, params) => {
+  const cachedAt = responseCacheTimestamps.get(normalizeCacheKey(url, params));
+  return cachedAt ? Date.now() - cachedAt : Infinity;
+};
+
+export const isCachedApiDataFresh = (url, params, maxAge = FRESH_CACHE_WINDOW_MS) =>
+  getCachedApiDataAge(url, params) <= maxAge;
+
+export const areCachedApiEndpointsFresh = (
+  endpoints = [],
+  maxAge = FRESH_CACHE_WINDOW_MS
+) =>
+  endpoints
+    .map((entry) => (typeof entry === "string" ? { url: entry } : entry))
+    .filter((entry) => entry?.url)
+    .every((entry) => isCachedApiDataFresh(entry.url, entry.params, maxAge));
 
 export const clearApiDataCache = () => {
   responseCache.clear();
+  responseCacheTimestamps.clear();
 };
 
 export const preloadApiData = async (endpoints = [], options = {}) => {
@@ -39,7 +81,7 @@ export const preloadApiData = async (endpoints = [], options = {}) => {
   const requests = endpoints
     .map((entry) => (typeof entry === "string" ? { url: entry } : entry))
     .filter((entry) => entry?.url)
-    .filter((entry) => force || getCachedApiData(entry.url, entry.params) === undefined)
+    .filter((entry) => force || !isCachedApiDataFresh(entry.url, entry.params))
     .map((entry) => api.get(entry.url, { params: entry.params }));
 
   if (requests.length === 0) return [];
@@ -60,8 +102,15 @@ api.interceptors.request.use((config) => {
     };
   }
 
+  const requestUrl = String(config.url || "");
+  const isPublicRequest = [
+    "register/",
+    "token/",
+    "token/refresh/",
+    "install/info/",
+  ].some((endpoint) => requestUrl.includes(endpoint));
   const token = localStorage.getItem("access");
-  if (token) {
+  if (token && !isPublicRequest) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -127,6 +176,63 @@ const rememberWorkingApiBaseUrl = (response) => {
   }
 };
 
+const isAuthEndpoint = (url = "") =>
+  ["register/", "token/", "token/refresh/"].some((endpoint) =>
+    String(url).includes(endpoint)
+  );
+
+const getUniqueBaseUrls = (preferredBaseUrl) =>
+  Array.from(new Set([preferredBaseUrl, api.defaults.baseURL, ...API_BASE_URLS].filter(Boolean)));
+
+const requestTokenRefresh = async (preferredBaseUrl) => {
+  const refresh = localStorage.getItem("refresh");
+  if (!refresh) {
+    throw new Error("Refresh token lipsa");
+  }
+
+  let lastError = null;
+  for (const baseURL of getUniqueBaseUrls(preferredBaseUrl)) {
+    try {
+      const response = await axios.post("token/refresh/", { refresh }, { baseURL });
+      storeAuthTokens(response.data);
+      rememberWorkingApiBaseUrl(response);
+      return response.data.access;
+    } catch (error) {
+      lastError = error;
+
+      const statusCode = error.response?.status;
+      if (statusCode === 401 || statusCode === 403) {
+        break;
+      }
+    }
+  }
+
+  throw lastError || new Error("Refresh token esuat");
+};
+
+const refreshAccessToken = (preferredBaseUrl) => {
+  if (!refreshTokenRequest) {
+    refreshTokenRequest = requestTokenRefresh(preferredBaseUrl).finally(() => {
+      refreshTokenRequest = null;
+    });
+  }
+
+  return refreshTokenRequest;
+};
+
+const shouldRefreshAccessToken = (error) => {
+  const responseStatus = error.response?.status;
+  const requestUrl = error.config?.url || "";
+
+  return (
+    responseStatus === 401 &&
+    error.config &&
+    !error.config.__authRetry &&
+    !isAuthEndpoint(requestUrl) &&
+    Boolean(localStorage.getItem("refresh"))
+  );
+};
+
 api.interceptors.response.use(
   (response) => {
     if (isHtmlResponse(response)) {
@@ -146,6 +252,23 @@ api.interceptors.response.use(
     return response;
   },
   async (error) => {
+    if (shouldRefreshAccessToken(error)) {
+      try {
+        const access = await refreshAccessToken(error.config.baseURL);
+        return api.request({
+          ...error.config,
+          __authRetry: true,
+          headers: {
+            ...(error.config.headers || {}),
+            Authorization: `Bearer ${access}`,
+          },
+        });
+      } catch {
+        clearStoredAuthTokens();
+        clearApiDataCache();
+      }
+    }
+
     if (!shouldTryNextApiBaseUrl(error)) {
       return Promise.reject(error);
     }

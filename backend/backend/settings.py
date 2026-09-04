@@ -34,6 +34,16 @@ def env_bool(name, default=False):
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def env_int(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -194,6 +204,19 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Arhivele financiare sunt private și se descarcă numai prin endpointuri
+# autentificate. Nu muta acest director sub MEDIA_ROOT sau într-un alias nginx.
+FINANCIAL_ARCHIVE_ROOT = Path(
+    os.environ.get(
+        "FINANCIAL_ARCHIVE_ROOT",
+        REPO_DIR / "arhiva" / "date-financiare",
+    )
+).resolve()
+FINANCIAL_ARCHIVE_KEEP_CYCLES = max(
+    2,
+    env_int("FINANCIAL_ARCHIVE_KEEP_CYCLES", 2),
+)
+
 FRONTEND_DIST_DIR = REPO_DIR / "frontend" / "dist"
 STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.exists() else []
 
@@ -227,8 +250,10 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=env_int("JWT_ACCESS_TOKEN_MINUTES", 60)
+    ),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=env_int("JWT_REFRESH_TOKEN_DAYS", 30)),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 

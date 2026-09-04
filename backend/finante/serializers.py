@@ -1,10 +1,8 @@
 from django.contrib.auth.models import User
+from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.db import transaction
 from django.utils.text import slugify
 from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
-from .models import Fond, MiscareFond
-from .utils_users import get_connected_user_ids
-
 from .models import (
     Credit,
     DEFAULT_INVESTMENT_CATEGORIES,
@@ -16,6 +14,7 @@ from .models import (
     CheltuialaVariabila,
     EconomieVacanta,
     EconomieLunara,
+    MiscareFond,
     ObiectivCheltuieliGlobal,
     RealizariTarget,
     UserProfile,
@@ -35,10 +34,28 @@ def investment_category_exists(user, value):
         return True
     if not user or not getattr(user, "is_authenticated", False):
         return False
-    return InvestitieCategorie.objects.filter(
-        user_id__in=get_connected_user_ids(user),
-        value=value,
-    ).exists()
+    return InvestitieCategorie.objects.filter(user=user, value=value).exists()
+
+
+def validate_investment_amounts(data, instance=None, positive_only=False):
+    amounts = {
+        field: data[field] if field in data else getattr(instance, field, None)
+        for field in ("suma_eur", "suma_ron")
+    }
+
+    if not any(value not in (None, 0) for value in amounts.values()):
+        raise serializers.ValidationError(
+            "Trebuie completata suma in EUR sau RON"
+        )
+
+    if positive_only:
+        invalid_fields = {
+            field: "Suma trebuie sa fie mai mare decat zero."
+            for field, value in amounts.items()
+            if value is not None and value <= 0
+        }
+        if invalid_fields:
+            raise serializers.ValidationError(invalid_fields)
 
 
 def build_unique_investment_category_value(user, label):
@@ -58,17 +75,37 @@ def build_unique_investment_category_value(user, label):
 
 class RegisterSerializer(serializers.ModelSerializer):
     username = serializers.CharField(
-        validators=[UniqueValidator(queryset=User.objects.all())]
+        max_length=150,
+        validators=[UnicodeUsernameValidator()],
     )
-    email = serializers.EmailField(
-        validators=[UniqueValidator(queryset=User.objects.all())]
-    )
+    email = serializers.EmailField(max_length=254)
     password = serializers.CharField(write_only=True, min_length=6)
 
     class Meta:
         model = User
         fields = ("username", "email", "password")
 
+    def validate_username(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Numele de utilizator este obligatoriu.")
+        queryset = User.objects.filter(username__iexact=value)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Acest nume de utilizator este deja folosit.")
+        return value
+
+    def validate_email(self, value):
+        value = (value or "").strip().lower()
+        queryset = User.objects.filter(email__iexact=value)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Această adresă de email este deja folosită.")
+        return value
+
+    @transaction.atomic
     def create(self, validated_data):
         user = User.objects.create_user(
             username=validated_data["username"],
@@ -149,6 +186,7 @@ class CheltuialaVariabilaSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "categorie",
+            "descriere",
             "suma",
             "moneda",
             "data",
@@ -170,13 +208,6 @@ class EconomieLunaraSerializer(serializers.ModelSerializer):
         read_only_fields = ("luna", "sold")
 
 
-class FondSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Fond
-        exclude = ("user",)
-        read_only_fields = ("data",)
-
-
 class MiscareFondSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="user.username", read_only=True)
     rubrica = serializers.CharField(max_length=60)
@@ -187,8 +218,7 @@ class MiscareFondSerializer(serializers.ModelSerializer):
         read_only_fields = ("automatizare",)
 
     def validate(self, data):
-        if not data.get("suma_eur") and not data.get("suma_ron"):
-            raise serializers.ValidationError("Trebuie completată suma în EUR sau RON")
+        validate_investment_amounts(data, self.instance)
 
         request = self.context.get("request")
         user = request.user if request else None
@@ -245,8 +275,7 @@ class InvestitieAutomataSerializer(serializers.ModelSerializer):
         read_only_fields = ("created_at", "updated_at")
 
     def validate(self, data):
-        if not data.get("suma_eur") and not data.get("suma_ron"):
-            raise serializers.ValidationError("Trebuie completată suma în EUR sau RON")
+        validate_investment_amounts(data, self.instance, positive_only=True)
 
         request = self.context.get("request")
         user = request.user if request else None
@@ -303,6 +332,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "telefon",
             "venit_estimat",
             "venit_estimat_lunar",
+            "budget_cycle_start_day",
             "salary_schedules",
         )
 

@@ -220,6 +220,11 @@ const styles = {
     color: colors.muted,
     marginBottom: 22,
   },
+  installAction: {
+    display: "flex",
+    justifyContent: "center",
+    marginTop: 14,
+  },
   row: {
     display: "flex",
     justifyContent: "space-between",

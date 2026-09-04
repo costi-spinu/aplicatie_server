@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-import { getCachedApiData } from "../services/apiConfig";
+import {
+  areCachedApiEndpointsFresh,
+  getCachedApiData,
+} from "../services/apiConfig";
+import {
+  FONDURI_ENDPOINTS,
+  FONDURI_OWN_CACHE_PARAMS,
+} from "../services/preloadEndpoints";
 import styles from "../styles/iosStyles";
+import { translateCurrentText } from "../contexts/AppSettingsContext";
 
 const FALLBACK_RUBRICI = [
   { value: "fond_urgenta", label: "Fond de urgenta" },
@@ -20,20 +28,25 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 const formatAmount = (value) => toNumber(value).toFixed(2);
-const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
+const getCurrentMonthKey = () => {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+};
 const getItemMonthKey = (item) => String(item.data || "").slice(0, 7);
+const getStartMonthFromDate = (value) =>
+  String(value || "").slice(0, 7) || getCurrentMonthKey();
 const clampDay = (value) => Math.min(Math.max(Number(value || 1), 1), 31);
 const getDayFromDate = (value) => {
   if (!value) return String(new Date().getDate()).padStart(2, "0");
   return String(clampDay(String(value).split("-")[2])).padStart(2, "0");
 };
-const buildDateForCurrentMonthDay = (dayValue) => {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
+const buildDateForMonthDay = (startMonth, dayValue) => {
+  const [yearPart, monthPart] = getStartMonthFromDate(startMonth).split("-");
+  const year = Number(yearPart);
+  const month = Number(monthPart);
   const day = clampDay(dayValue);
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(
     Math.min(day, lastDay)
   ).padStart(2, "0")}`;
 };
@@ -96,14 +109,20 @@ const getApiErrorMessage = (error, fallback) => {
 };
 
 export default function Fonduri() {
-  const cachedFonduri = getCachedApiData("fonduri/") || {};
+  const cachedFonduri =
+    getCachedApiData("fonduri/", FONDURI_OWN_CACHE_PARAMS) || {};
   const cachedMiscari = Array.isArray(cachedFonduri.miscari)
     ? cachedFonduri.miscari
     : [];
   const cachedFonduriTotals = sumFonduri(cachedMiscari);
   const cachedCategorii =
-    getCachedApiData("fonduri/categorii/") || cachedFonduri.categorii;
-  const cachedAutomate = getCachedApiData("investitii-automate/");
+    getCachedApiData("fonduri/categorii/", FONDURI_OWN_CACHE_PARAMS) ||
+    cachedFonduri.categorii;
+  const cachedAutomate = getCachedApiData(
+    "investitii-automate/",
+    FONDURI_OWN_CACHE_PARAMS
+  );
+  const cachedBridgeInvestments = getCachedApiData("fonduri/bridge/");
 
   const [activeTab, setActiveTab] = useState("date");
   const [tip, setTip] = useState("adauga");
@@ -129,6 +148,7 @@ export default function Fonduri() {
   );
   const [autoEditId, setAutoEditId] = useState(null);
   const [autoDenumire, setAutoDenumire] = useState("");
+  const [autoStartMonth, setAutoStartMonth] = useState(getCurrentMonthKey());
   const [autoDay, setAutoDay] = useState(String(new Date().getDate()));
   const [autoRubrica, setAutoRubrica] = useState("fond_urgenta");
   const [autoSumaEur, setAutoSumaEur] = useState("");
@@ -136,11 +156,18 @@ export default function Fonduri() {
   const [autoActiv, setAutoActiv] = useState(true);
   const [newCategoryLabel, setNewCategoryLabel] = useState("");
   const [loadingTotals, setLoadingTotals] = useState(false);
+  const [bridgeInvestments, setBridgeInvestments] = useState(() =>
+    Array.isArray(cachedBridgeInvestments?.users)
+      ? cachedBridgeInvestments.users
+      : []
+  );
 
   const loadMiscari = useCallback(async () => {
     setLoadingTotals(true);
     try {
-      const fonduriRes = await api.get("fonduri/");
+      const fonduriRes = await api.get("fonduri/", {
+        params: FONDURI_OWN_CACHE_PARAMS,
+      });
       const data = fonduriRes.data || {};
       const nextMiscari = Array.isArray(data.miscari) ? data.miscari : [];
       const calculatedTotals = sumFonduri(nextMiscari);
@@ -150,9 +177,10 @@ export default function Fonduri() {
       if (data.categorii) setCategorii(normalizeCategories(data.categorii));
       setLoadingTotals(false);
 
-      const [categoriiRes, automateRes] = await Promise.allSettled([
-        api.get("fonduri/categorii/"),
-        api.get("investitii-automate/"),
+      const [categoriiRes, automateRes, bridgeRes] = await Promise.allSettled([
+        api.get("fonduri/categorii/", { params: FONDURI_OWN_CACHE_PARAMS }),
+        api.get("investitii-automate/", { params: FONDURI_OWN_CACHE_PARAMS }),
+        api.get("fonduri/bridge/"),
       ]);
 
       if (categoriiRes.status === "fulfilled") {
@@ -169,6 +197,14 @@ export default function Fonduri() {
           automateRes.reason
         );
       }
+
+      if (bridgeRes.status === "fulfilled") {
+        setBridgeInvestments(
+          Array.isArray(bridgeRes.value.data?.users) ? bridgeRes.value.data.users : []
+        );
+      } else {
+        console.error("Eroare la incarcare investitii bridge:", bridgeRes.reason);
+      }
     } catch (err) {
       console.error("Eroare la incarcare fonduri:", err);
       setLoadingTotals(false);
@@ -176,6 +212,7 @@ export default function Fonduri() {
   }, []);
 
   useEffect(() => {
+    if (areCachedApiEndpointsFresh(FONDURI_ENDPOINTS)) return;
     void Promise.resolve().then(loadMiscari);
   }, [loadMiscari]);
 
@@ -183,17 +220,20 @@ export default function Fonduri() {
     const refreshFonduri = () => {
       void loadMiscari();
     };
+    const refreshIfStale = () => {
+      if (!areCachedApiEndpointsFresh(FONDURI_ENDPOINTS)) refreshFonduri();
+    };
     const refreshWhenVisible = () => {
-      if (!document.hidden) refreshFonduri();
+      if (!document.hidden) refreshIfStale();
     };
 
     window.addEventListener("finance-data-updated", refreshFonduri);
-    window.addEventListener("focus", refreshFonduri);
+    window.addEventListener("focus", refreshIfStale);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       window.removeEventListener("finance-data-updated", refreshFonduri);
-      window.removeEventListener("focus", refreshFonduri);
+      window.removeEventListener("focus", refreshIfStale);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [loadMiscari]);
@@ -221,6 +261,7 @@ export default function Fonduri() {
   const resetAutoForm = () => {
     setAutoEditId(null);
     setAutoDenumire("");
+    setAutoStartMonth(getCurrentMonthKey());
     setAutoDay(String(new Date().getDate()));
     setAutoRubrica(categorii[0]?.value || "fond_urgenta");
     setAutoSumaEur("");
@@ -326,6 +367,21 @@ export default function Fonduri() {
         ),
     [automate]
   );
+  const bridgeCombinedTotals = useMemo(
+    () =>
+      bridgeInvestments.reduce(
+        (acc, item) => ({
+          eur: acc.eur + toNumber(item.total_eur),
+          ron: acc.ron + toNumber(item.total_ron),
+        }),
+        { eur: 0, ron: 0 }
+      ),
+    [bridgeInvestments]
+  );
+  const connectedBridgeCount = useMemo(
+    () => bridgeInvestments.filter((item) => !item.is_current_user).length,
+    [bridgeInvestments]
+  );
 
   const submit = async (event) => {
     event.preventDefault();
@@ -380,6 +436,7 @@ export default function Fonduri() {
   const startAutoEdit = (item) => {
     setAutoEditId(item.id);
     setAutoDenumire(item.denumire || "");
+    setAutoStartMonth(getStartMonthFromDate(item.data));
     setAutoDay(getDayFromDate(item.data));
     setAutoRubrica(item.rubrica || categorii[0]?.value || "fond_urgenta");
     setAutoSumaEur(item.suma_eur ? String(Math.abs(Number(item.suma_eur))) : "");
@@ -391,7 +448,9 @@ export default function Fonduri() {
   };
 
   const stergeMiscare = async (id) => {
-    if (!window.confirm("Sigur stergi aceasta miscare?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi aceasta miscare?"))) {
+      return;
+    }
 
     const previousMiscari = miscari;
     applyLocalMiscari((current) => current.filter((item) => item.id !== id));
@@ -416,12 +475,12 @@ export default function Fonduri() {
 
     const payload = {
       denumire: autoDenumire,
-      data: buildDateForCurrentMonthDay(autoDay),
+      data: buildDateForMonthDay(autoStartMonth, autoDay),
       rubrica: selectedAutoRubrica,
+      suma_eur: autoSumaEur ? Number(autoSumaEur) : null,
+      suma_ron: autoSumaRon ? Number(autoSumaRon) : null,
       activ: autoActiv,
     };
-    if (autoSumaEur) payload.suma_eur = Number(autoSumaEur);
-    if (autoSumaRon) payload.suma_ron = Number(autoSumaRon);
 
     if (!payload.suma_eur && !payload.suma_ron) {
       setMsg("Introdu o suma automata in EUR sau RON");
@@ -446,7 +505,9 @@ export default function Fonduri() {
   };
 
   const stergeAutomatizare = async (item) => {
-    if (!window.confirm("Sigur stergi aceasta automatizare?")) return;
+    if (!window.confirm(translateCurrentText("Sigur stergi aceasta automatizare?"))) {
+      return;
+    }
 
     try {
       await api.delete(`investitii-automate/${item.id}/`);
@@ -618,12 +679,22 @@ export default function Fonduri() {
         />
         <input
           style={styles.input}
+          type="month"
+          aria-label="Luna de inceput"
+          title="Luna de inceput a automatizarii"
+          value={autoStartMonth}
+          onChange={(event) => setAutoStartMonth(event.target.value)}
+          required
+        />
+        <input
+          style={styles.input}
           type="number"
           min="1"
           max="31"
           placeholder="Ziua lunii"
           value={autoDay}
           onChange={(event) => setAutoDay(event.target.value)}
+          required
         />
         <select
           style={styles.input}
@@ -639,6 +710,8 @@ export default function Fonduri() {
         <input
           style={styles.input}
           type="number"
+          min="0.01"
+          step="0.01"
           placeholder="Suma EUR"
           value={autoSumaEur}
           onChange={(event) => {
@@ -649,6 +722,8 @@ export default function Fonduri() {
         <input
           style={styles.input}
           type="number"
+          min="0.01"
+          step="0.01"
           placeholder="Suma RON"
           value={autoSumaRon}
           onChange={(event) => {
@@ -692,6 +767,7 @@ export default function Fonduri() {
           <thead>
             <tr>
               <th style={localStyles.th}>Denumire</th>
+              <th style={localStyles.th}>Inceput</th>
               <th style={localStyles.th}>Ziua</th>
               <th style={localStyles.th}>Rubrica</th>
               <th style={localStyles.th}>EUR</th>
@@ -703,7 +779,7 @@ export default function Fonduri() {
           <tbody>
             {automate.length === 0 && (
               <tr>
-                <td colSpan="7" style={localStyles.td}>
+                <td colSpan="8" style={localStyles.td}>
                   Nu exista automatizari salvate.
                 </td>
               </tr>
@@ -711,6 +787,7 @@ export default function Fonduri() {
             {automate.map((item) => (
               <tr key={item.id}>
                 <td style={localStyles.td}>{item.denumire || "-"}</td>
+                <td style={localStyles.td}>{getStartMonthFromDate(item.data)}</td>
                 <td style={localStyles.td}>{getDayFromDate(item.data)}</td>
                 <td style={localStyles.td}>
                   {getRubricaLabel(item.rubrica, categorii)}
@@ -845,18 +922,98 @@ export default function Fonduri() {
     </div>
   );
 
+  const renderBridgeInvestments = () => (
+    <div style={styles.card}>
+      <h3 style={styles.sectionTitle}>Investitii bridge</h3>
+      <div style={styles.date}>
+        Se afiseaza totalul tau si totalul fiecarui utilizator conectat. Datele
+        raman separate si sunt doar pentru vizualizare.
+      </div>
+      {bridgeInvestments.length > 0 && (
+        <>
+          <div style={localStyles.autoTotalRow}>
+            <span>Total comun bridge</span>
+            <strong>
+              {formatAmount(bridgeCombinedTotals.eur)} EUR /{" "}
+              {formatAmount(bridgeCombinedTotals.ron)} RON
+            </strong>
+          </div>
+          <div style={localStyles.bridgeCount}>
+            Conexiuni bridge: {connectedBridgeCount}
+          </div>
+        </>
+      )}
+      {bridgeInvestments.length > 0 && connectedBridgeCount === 0 && (
+        <div style={styles.message}>
+          Nu exista alti utilizatori conectati prin bridge. Totalul tau este afisat
+          mai jos.
+        </div>
+      )}
+      {bridgeInvestments.length === 0 && (
+        <div style={styles.message}>Datele bridge nu sunt disponibile momentan.</div>
+      )}
+      <div style={localStyles.bridgeGrid}>
+        {bridgeInvestments.map((bridgeUser) => (
+          <div key={bridgeUser.user_id} style={localStyles.bridgeCard}>
+            <div style={localStyles.bridgeHeader}>
+              <strong>
+                {bridgeUser.username}
+                {bridgeUser.is_current_user ? " (tu)" : ""}
+              </strong>
+              <span>
+                {formatAmount(bridgeUser.total_eur)} EUR /{" "}
+                {formatAmount(bridgeUser.total_ron)} RON
+              </span>
+            </div>
+            <div style={localStyles.tableWrap}>
+              <table style={localStyles.table}>
+                <thead>
+                  <tr>
+                    <th style={localStyles.th}>Rubrica</th>
+                    <th style={localStyles.th}>Total EUR</th>
+                    <th style={localStyles.th}>Total RON</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bridgeUser.rubrici.length === 0 && (
+                    <tr>
+                      <td colSpan="3" style={localStyles.td}>
+                        Utilizatorul nu are investitii inregistrate.
+                      </td>
+                    </tr>
+                  )}
+                  {bridgeUser.rubrici.map((item) => (
+                    <tr key={item.value}>
+                      <td style={localStyles.td}>{item.label}</td>
+                      <td style={localStyles.td}>
+                        {formatAmount(item.total_eur)}
+                      </td>
+                      <td style={localStyles.td}>
+                        {formatAmount(item.total_ron)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>Fonduri investitii</h2>
 
       <div style={localStyles.heroGrid}>
         <div style={localStyles.heroBox}>
-          <div style={localStyles.heroLabel}>Total general EUR</div>
+          <div style={localStyles.heroLabel}>Totalul meu EUR</div>
           <div style={localStyles.heroValue}>{formatAmount(displayTotalEur)} EUR</div>
           {loadingTotals && <div style={localStyles.heroHint}>Se incarca...</div>}
         </div>
         <div style={localStyles.heroBox}>
-          <div style={localStyles.heroLabel}>Total general RON</div>
+          <div style={localStyles.heroLabel}>Totalul meu RON</div>
           <div style={localStyles.heroValue}>{formatAmount(displayTotalRon)} RON</div>
           {loadingTotals && <div style={localStyles.heroHint}>Se incarca...</div>}
         </div>
@@ -870,6 +1027,7 @@ export default function Fonduri() {
           ["automate", "Date automate"],
           ["creare", "Creare investitie"],
           ["istoric", "Istoric fonduri"],
+          ["bridge", "Investitii bridge"],
           ["export", "Export fonduri"],
         ].map(([key, label]) => (
           <button
@@ -982,6 +1140,8 @@ export default function Fonduri() {
       {activeTab === "creare" && renderCreareInvestitie()}
 
       {activeTab === "istoric" && renderHistory()}
+
+      {activeTab === "bridge" && renderBridgeInvestments()}
 
       {activeTab === "export" && (
         <div style={styles.card}>
@@ -1188,6 +1348,34 @@ const localStyles = {
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 10,
     marginTop: 16,
+  },
+  bridgeGrid: {
+    display: "grid",
+    gap: 14,
+    marginTop: 16,
+  },
+  bridgeCount: {
+    marginTop: 10,
+    color: "var(--app-muted)",
+    fontSize: 13,
+    fontWeight: 800,
+  },
+  bridgeCard: {
+    border: "1px solid var(--app-border)",
+    borderRadius: 6,
+    overflow: "hidden",
+    background: "var(--app-panel)",
+  },
+  bridgeHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    padding: "12px 14px",
+    background: "var(--app-panel-alt)",
+    borderBottom: "1px solid var(--app-border)",
+    color: "var(--app-text)",
   },
   categoryItem: {
     display: "grid",

@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
 import styles from "../styles/iosStyles";
+import { translateCurrentText } from "../contexts/AppSettingsContext";
 
 export default function AdminPanel() {
   const [users, setUsers] = useState([]);
   const [editUser, setEditUser] = useState(null);
   const [search, setSearch] = useState("");
+  const [newUser, setNewUser] = useState({
+    username: "",
+    email: "",
+    password: "",
+  });
+  const [createMessage, setCreateMessage] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -30,6 +39,40 @@ export default function AdminPanel() {
     [search, users]
   );
 
+  const createUser = async (event) => {
+    event.preventDefault();
+    setCreateMessage("");
+    setCreateError("");
+
+    if (!newUser.username.trim() || !newUser.email.trim() || !newUser.password) {
+      setCreateError("Completează toate câmpurile pentru noul utilizator.");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      await api.post("admin/users/", {
+        username: newUser.username.trim(),
+        email: newUser.email.trim().toLowerCase(),
+        password: newUser.password,
+      });
+      setNewUser({ username: "", email: "", password: "" });
+      setCreateMessage("Utilizatorul a fost creat cu succes.");
+      await loadUsers();
+    } catch (error) {
+      const responseData = error.response?.data;
+      const messages = responseData && typeof responseData === "object"
+        ? Object.values(responseData)
+            .flatMap((value) => (Array.isArray(value) ? value : [value]))
+            .filter(Boolean)
+            .map(String)
+        : [];
+      setCreateError(messages.join(" ") || "Utilizatorul nu a putut fi creat.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const saveUser = async () => {
     await api.put(`admin/users/${editUser.id}/`, editUser);
     setEditUser(null);
@@ -37,10 +80,12 @@ export default function AdminPanel() {
   };
 
   const deleteUser = async (user) => {
-    if (!window.confirm("Sigur vrei sa stergi acest utilizator?")) return;
+    if (!window.confirm(translateCurrentText("Sigur vrei sa stergi acest utilizator?"))) {
+      return;
+    }
 
     if (user.is_superuser) {
-      alert("Nu poti sterge un superuser.");
+      window.alert(translateCurrentText("Nu poti sterge un superuser."));
       return;
     }
 
@@ -52,6 +97,55 @@ export default function AdminPanel() {
     <div style={styles.container}>
       <div style={styles.card}>
         <h2 style={styles.title}>Administrare utilizatori</h2>
+
+        <form onSubmit={createUser} style={localStyles.createForm}>
+          <h3 style={styles.sectionTitle}>Utilizator nou</h3>
+          <div style={localStyles.createGrid}>
+            <input
+              style={styles.input}
+              placeholder="Nume utilizator"
+              autoComplete="off"
+              value={newUser.username}
+              onChange={(event) =>
+                setNewUser((current) => ({
+                  ...current,
+                  username: event.target.value,
+                }))
+              }
+            />
+            <input
+              style={styles.input}
+              type="email"
+              placeholder="Email"
+              autoComplete="off"
+              value={newUser.email}
+              onChange={(event) =>
+                setNewUser((current) => ({
+                  ...current,
+                  email: event.target.value,
+                }))
+              }
+            />
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="Parolă (minimum 6 caractere)"
+              autoComplete="new-password"
+              value={newUser.password}
+              onChange={(event) =>
+                setNewUser((current) => ({
+                  ...current,
+                  password: event.target.value,
+                }))
+              }
+            />
+          </div>
+          {createError && <div style={styles.errorBox}>{createError}</div>}
+          {createMessage && <div style={styles.messageBox}>{createMessage}</div>}
+          <button type="submit" style={styles.blueButton} disabled={creating}>
+            {creating ? "Se creează..." : "Creează utilizator"}
+          </button>
+        </form>
 
         <input
           style={localStyles.searchInput}
@@ -157,6 +251,18 @@ export default function AdminPanel() {
 }
 
 const localStyles = {
+  createForm: {
+    padding: 16,
+    marginBottom: 20,
+    border: "1px solid var(--app-border)",
+    borderRadius: 6,
+    background: "var(--app-panel-alt)",
+  },
+  createGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+    gap: 10,
+  },
   searchInput: {
     width: "100%",
     padding: "10px 12px",

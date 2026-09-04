@@ -8,6 +8,11 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  ADDITIONAL_TRANSLATIONS,
+  PREFIX_TRANSLATIONS,
+  SUFFIX_TRANSLATIONS,
+} from "./translationsExtra";
 
 export const LANGUAGES = [
   { code: "ro", label: "Romana" },
@@ -292,6 +297,12 @@ const TRANSLATIONS = {
     fr: "Mois en cours",
     it: "Mese corrente",
   },
+  "Ciclul curent": {
+    en: "Current cycle",
+    de: "Aktueller Zyklus",
+    fr: "Cycle en cours",
+    it: "Ciclo corrente",
+  },
   Istoric: { en: "History", de: "Verlauf", fr: "Historique", it: "Storico" },
   "Selecteaza luna": {
     en: "Select month",
@@ -299,11 +310,23 @@ const TRANSLATIONS = {
     fr: "Selectionner le mois",
     it: "Seleziona mese",
   },
+  "Selecteaza ciclul": {
+    en: "Select cycle",
+    de: "Zyklus auswahlen",
+    fr: "Selectionner le cycle",
+    it: "Seleziona ciclo",
+  },
   "Obiective lunare": {
     en: "Monthly goals",
     de: "Monatliche Ziele",
     fr: "Objectifs mensuels",
     it: "Obiettivi mensili",
+  },
+  "Obiective pe ciclu": {
+    en: "Goals by cycle",
+    de: "Ziele pro Zyklus",
+    fr: "Objectifs par cycle",
+    it: "Obiettivi per ciclo",
   },
   "Tinta totala": {
     en: "Total target",
@@ -571,9 +594,11 @@ const TRANSLATIONS = {
     fr: "QR indisponible",
     it: "QR non disponibile",
   },
+  ...ADDITIONAL_TRANSLATIONS,
 };
 
-const textNodeOriginals = new WeakMap();
+const textNodeStates = new WeakMap();
+const attributeStates = new WeakMap();
 
 const normalizeKey = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
@@ -581,11 +606,28 @@ export const translateText = (value, language = "ro") => {
   if (!value || language === "ro") return value;
   const raw = String(value);
   const key = normalizeKey(raw);
-  const translated = TRANSLATIONS[key]?.[language];
-  if (!translated) return value;
   const leading = raw.match(/^\s*/)?.[0] || "";
   const trailing = raw.match(/\s*$/)?.[0] || "";
-  return `${leading}${translated}${trailing}`;
+  const translated = TRANSLATIONS[key]?.[language];
+  if (translated) return `${leading}${translated}${trailing}`;
+
+  const prefix = PREFIX_TRANSLATIONS.find((item) => key.startsWith(item.ro));
+  if (prefix?.[language]) {
+    return `${leading}${prefix[language]}${key.slice(prefix.ro.length)}${trailing}`;
+  }
+
+  const suffix = SUFFIX_TRANSLATIONS.find((item) => key.endsWith(item.ro));
+  if (suffix?.[language]) {
+    return `${leading}${key.slice(0, -suffix.ro.length)}${suffix[language]}${trailing}`;
+  }
+
+  return value;
+};
+
+export const translateCurrentText = (value) => {
+  const language =
+    typeof window === "undefined" ? "ro" : localStorage.getItem("app_language") || "ro";
+  return translateText(value, language);
 };
 
 const AppSettingsContext = createContext({
@@ -619,23 +661,43 @@ function translateDocument(language) {
   while (walker.nextNode()) nodes.push(walker.currentNode);
 
   nodes.forEach((node) => {
-    if (!textNodeOriginals.has(node)) {
-      textNodeOriginals.set(node, node.nodeValue);
+    const currentValue = node.nodeValue;
+    let state = textNodeStates.get(node);
+
+    if (!state || currentValue !== state.rendered) {
+      state = { original: currentValue, rendered: currentValue };
+      textNodeStates.set(node, state);
     }
-    node.nodeValue = translateText(textNodeOriginals.get(node), language);
+
+    const nextValue = translateText(state.original, language);
+    state.rendered = nextValue;
+    if (currentValue !== nextValue) {
+      node.nodeValue = nextValue;
+    }
   });
 
   root.querySelectorAll("[placeholder], [title], [aria-label]").forEach((element) => {
+    let states = attributeStates.get(element);
+    if (!states) {
+      states = new Map();
+      attributeStates.set(element, states);
+    }
+
     ["placeholder", "title", "aria-label"].forEach((attr) => {
       if (!element.hasAttribute(attr)) return;
-      const dataAttr = `i18nOriginal${attr.replace("-", "")}`;
-      if (!element.dataset[dataAttr]) {
-        element.dataset[dataAttr] = element.getAttribute(attr);
+      const currentValue = element.getAttribute(attr);
+      let state = states.get(attr);
+
+      if (!state || currentValue !== state.rendered) {
+        state = { original: currentValue, rendered: currentValue };
+        states.set(attr, state);
       }
-      element.setAttribute(
-        attr,
-        translateText(element.dataset[dataAttr], language)
-      );
+
+      const nextValue = translateText(state.original, language);
+      state.rendered = nextValue;
+      if (currentValue !== nextValue) {
+        element.setAttribute(attr, nextValue);
+      }
     });
   });
 }

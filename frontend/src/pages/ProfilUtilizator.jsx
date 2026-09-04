@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-import { getCachedApiData } from "../services/apiConfig";
+import {
+  getCachedApiData,
+  setCachedApiData,
+} from "../services/apiConfig";
 import styles from "../styles/iosStyles";
+import { buildDailyVariableSpend } from "../utils/cheltuieliUtils";
 import { prepareMediaValueForApi, resolveMediaUrl } from "../utils/mediaUrl";
 
 const RON_TO_EUR_FALLBACK = 0.2;
+const MAX_PROFILE_PHOTO_SIZE = 5 * 1024 * 1024;
+const PROFILE_PHOTO_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
 
 const RUBRICI = [
   { value: "fond_urgenta", label: "Fond de urgenta" },
@@ -154,8 +166,10 @@ export default function ProfilUtilizator() {
   const [rateDate, setRateDate] = useState(cachedRate?.date || "");
   const [rateSource, setRateSource] = useState(cachedRate?.source || "fallback");
   const [failedPhotoUrl, setFailedPhotoUrl] = useState("");
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
   const profilePhotoUrl = resolveMediaUrl(profile?.poza);
-  const photoLoadError = profilePhotoUrl && failedPhotoUrl === profilePhotoUrl;
+  const visiblePhotoUrl = photoPreviewUrl || profilePhotoUrl;
+  const photoLoadError = visiblePhotoUrl && failedPhotoUrl === visiblePhotoUrl;
 
   const loadProfile = useCallback(async () => {
     const res = await api.get("profile/");
@@ -297,17 +311,34 @@ export default function ProfilUtilizator() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    if (!PROFILE_PHOTO_TYPES.has(file.type.toLowerCase())) {
+      setMsg("Format acceptat: JPG, PNG, WEBP sau GIF.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > MAX_PROFILE_PHOTO_SIZE) {
+      setMsg("Imaginea trebuie sa fie mai mica de 5 MB.");
+      event.target.value = "";
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
+      const previewUrl = typeof reader.result === "string" ? reader.result : "";
       setFailedPhotoUrl("");
-      updateProfileField("poza", reader.result);
+      setPhotoPreviewUrl(previewUrl);
+      updateProfileField("poza", previewUrl);
+      setMsg("Poza este pregatita. Salveaza profilul pentru a o pastra.");
     };
+    reader.onerror = () => setMsg("Imaginea nu a putut fi citita.");
     reader.readAsDataURL(file);
     event.target.value = "";
   };
 
   const removeProfilePhoto = () => {
     setFailedPhotoUrl("");
+    setPhotoPreviewUrl("");
     updateProfileField("poza", "");
     setMsg("Poza va fi stearsa dupa ce salvezi profilul.");
   };
@@ -346,8 +377,11 @@ export default function ProfilUtilizator() {
       };
 
       const res = await api.put("profile/", payload);
+      setCachedApiData("profile/", res.data);
       const nextProfile = res.data.profile || {};
       const schedules = nextProfile.salary_schedules || [];
+      setFailedPhotoUrl("");
+      setPhotoPreviewUrl("");
       setUser({
         id: res.data.id,
         username: res.data.username || "",
@@ -360,7 +394,9 @@ export default function ProfilUtilizator() {
         salary_schedules: schedules.length ? schedules : [emptySchedule()],
       });
       await loadFinancialData();
-      window.dispatchEvent(new Event("profile-updated"));
+      window.dispatchEvent(
+        new CustomEvent("profile-updated", { detail: res.data })
+      );
       setMsg("Profil actualizat.");
     } catch (error) {
       console.error(error);
@@ -431,6 +467,14 @@ export default function ProfilUtilizator() {
       perioada: buget.luna || "",
     };
   }, [financialData]);
+
+  const dailyVariableSpend = useMemo(
+    () =>
+      buildDailyVariableSpend(financialData.variabile, (amount, currency) =>
+        convertToEur(amount, currency, ronToEurRate)
+      ),
+    [financialData.variabile, ronToEurRate]
+  );
 
   const investmentRows = useMemo(() => {
     const totals = RUBRICI.reduce((acc, item) => {
@@ -549,12 +593,13 @@ export default function ProfilUtilizator() {
       {activeTab === "profile" && (
         <div style={styles.card}>
           <div style={localStyles.profileHeader}>
-            {profilePhotoUrl && !photoLoadError ? (
+            {visiblePhotoUrl && !photoLoadError ? (
               <img
-                src={profilePhotoUrl}
+                src={visiblePhotoUrl}
                 alt="Profil"
                 style={localStyles.avatar}
-                onError={() => setFailedPhotoUrl(profilePhotoUrl)}
+                onLoad={() => setFailedPhotoUrl("")}
+                onError={() => setFailedPhotoUrl(visiblePhotoUrl)}
               />
             ) : (
               <div style={localStyles.avatarPlaceholder}>Profil</div>
@@ -751,6 +796,11 @@ export default function ProfilUtilizator() {
             {renderMetric(
               "Suma cheltuita",
               formatAmount(financialSummary.cheltuieli)
+            )}
+            {renderMetric(
+              "Media pe zi variabile",
+              `${dailyVariableSpend.average.toFixed(2)} EUR/zi`,
+              `${dailyVariableSpend.total.toFixed(2)} EUR / ${dailyVariableSpend.daysElapsed} zile din perioada`
             )}
             {renderMetric(
               "Suma economisita",

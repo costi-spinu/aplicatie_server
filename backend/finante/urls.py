@@ -19,11 +19,13 @@ from .views import (
     venit_total_lunar,
     buget_lunar,
     grafice_luna,
+    raport_bugetar,
     calculeaza_economii_luna,
     istoric_economii,
     economii_vacanta_sumar,
     categorii_investitii,
     fonduri,
+    fonduri_bridge,
     miscare_fond,
     miscare_fond_detail,
     fonduri_grafic,
@@ -39,7 +41,6 @@ from .views import (
     bridge_connections,
     accept_bridge,
     fonduri_grafic_timeline_extended,
-    FondViewSet,
     RealizariTargetViewSet,
     profile,
     change_password,
@@ -48,6 +49,10 @@ from .views import (
     obiective_cheltuieli_global,
     curs_bnr,
     install_info,
+    perioada_bugetara_config,
+    arhive_financiare,
+    ruleaza_arhivarea,
+    descarca_arhiva,
 )
 
 router = DefaultRouter()
@@ -83,11 +88,22 @@ router.register(
     EconomieVacantaViewSet,
     basename="economii-vacanta",
 )
-# router.register(r"fonduri", FondViewSet, basename="fonduri")
 urlpatterns = [
     # auth
     path("register/", RegisterView.as_view(), name="register"),
     path("me/", me, name="me"),
+    path(
+        "perioada-bugetara/",
+        perioada_bugetara_config,
+        name="perioada-bugetara",
+    ),
+    path("arhive/", arhive_financiare, name="arhive-financiare"),
+    path("arhive/ruleaza/", ruleaza_arhivarea, name="ruleaza-arhivarea"),
+    path(
+        "arhive/<uuid:archive_id>/<str:file_kind>/",
+        descarca_arhiva,
+        name="descarca-arhiva",
+    ),
     path("profile/", profile, name="profile"),
     path("profile/password/", change_password, name="change-password"),
     path("email-change/request/", request_email_change, name="email-change-request"),
@@ -104,6 +120,7 @@ urlpatterns = [
     path("install/info/", install_info, name="install-info"),
     path("buget/lunar/", buget_lunar, name="buget-lunar"),
     path("grafice/luna/", grafice_luna, name="grafice-luna"),
+    path("raport/bugetar/", raport_bugetar, name="raport-bugetar"),
     path(
         "obiective-cheltuieli-global/",
         obiective_cheltuieli_global,
@@ -116,6 +133,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("economii/vacanta/", economii_vacanta_sumar, name="economii-vacanta-sumar"),
     path("fonduri/", fonduri, name="fonduri"),
+    path("fonduri/bridge/", fonduri_bridge, name="fonduri-bridge"),
     path("fonduri/categorii/", categorii_investitii, name="fonduri-categorii"),
     path("fonduri/miscare/", miscare_fond, name="miscare-fond"),
     path("fonduri/miscare/<int:pk>/", miscare_fond_detail, name="miscare-fond-detail"),
@@ -128,7 +146,6 @@ urlpatterns = [
     path("admin/users/", lista_utilizatori),
     path("admin/users/<int:pk>/", update_user),
     path("admin/stats/", admin_stats),
-    path("admin/users/<int:pk>/", update_user),
     path("admin/users/<int:pk>/delete/", delete_user),
     path("users/list/", lista_useri_simpli),
     path("bridge/send/", send_bridge),

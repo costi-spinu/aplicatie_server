@@ -125,7 +125,7 @@ class BaseViewSet(viewsets.ModelViewSet):
             )
 
 
-BNR_RATES_URL = "https://www.bnr.ro/nbrfxrates.xml"
+BNR_RATES_URL = "https://curs.bnr.ro/nbrfxrates.xml"
 BNR_RATES_CACHE = {"data": None, "fetched_at": None}
 BNR_RATES_CACHE_SECONDS = 6 * 60 * 60
 PROFILE_IMAGE_MIME_EXTENSIONS = {

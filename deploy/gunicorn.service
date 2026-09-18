@@ -1,0 +1,19 @@
+[Unit]
+Description=Gunicorn daemon for Buget & Economii
+Requires=postgresql.service
+After=network.target postgresql.service
+
+[Service]
+User=c0stelus
+Group=www-data
+WorkingDirectory=/home/c0stelus/aplicatie_server/backend
+ExecStartPre=/usr/bin/pg_isready --quiet --host=127.0.0.1 --port=5432 --timeout=5
+ExecStart=/home/c0stelus/aplicatie_server/venv/bin/gunicorn \
+          --workers 2 \
+          --bind unix:/home/c0stelus/aplicatie_server/backend/gunicorn.sock \
+          backend.wsgi:application
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
